@@ -313,17 +313,17 @@ class QueVeoHoyApp:
         btn_frame = ctk.CTkFrame(self.card_frame, fg_color="transparent")
         btn_frame.pack(side='bottom', pady=(5, 15))
         
-        self.btn_visto = ctk.CTkButton(btn_frame, text="Ya la vi", command=self.on_marcar_visto, 
-                                       corner_radius=30, fg_color="#064E3B", hover_color="#042F2E", 
-                                       text_color="#10B981", border_width=0, font=("Helvetica", 12, "bold"))
+        self.btn_visto = ctk.CTkButton(btn_frame, text="✔ Ya la vi", command=self.on_marcar_visto, 
+                                       corner_radius=18, fg_color="#064E3B", hover_color="#042F2E", 
+                                       text_color="#10B981", border_color="#059669", border_width=2, font=("Segoe UI", 12, "bold"))
         
-        self.btn_para_despues = ctk.CTkButton(btn_frame, text="Dejar para después", command=self.on_para_despues, 
-                                              corner_radius=30, fg_color="#78350F", hover_color="#451A03", 
-                                              text_color="#F59E0B", border_width=0, font=("Helvetica", 12, "bold"))
+        self.btn_para_despues = ctk.CTkButton(btn_frame, text="🕒 Dejar para después", command=self.on_para_despues, 
+                                              corner_radius=18, fg_color="#78350F", hover_color="#451A03", 
+                                              text_color="#F59E0B", border_color="#D97706", border_width=2, font=("Segoe UI", 12, "bold"))
                                               
-        self.btn_siguiente = ctk.CTkButton(btn_frame, text="Siguiente", command=self.on_siguiente, 
-                                           corner_radius=30, fg_color=COLOR_PRIMARY, hover_color=COLOR_DARK, 
-                                           text_color=COLOR_TEXT, border_width=0, font=("Helvetica", 12, "bold"))
+        self.btn_siguiente = ctk.CTkButton(btn_frame, text="⏩ Siguiente", command=self.on_siguiente, 
+                                           corner_radius=18, fg_color="#3B0764", hover_color="#2E054E", 
+                                           text_color="#C084FC", border_color="#A855F7", border_width=2, font=("Segoe UI", 12, "bold"))
         
         self.btn_visto.pack(side='left', padx=5)
         self.btn_para_despues.pack(side='left', padx=5)
@@ -333,22 +333,22 @@ class QueVeoHoyApp:
         btn_frame_extra = ctk.CTkFrame(self.card_frame, fg_color="transparent", height=0)
         btn_frame_extra.pack(side='bottom', pady=(0, 5))
         
-        self.btn_pausar = ctk.CTkButton(btn_frame_extra, text="Pausar", command=self.on_pausar, 
-                                        corner_radius=30, fg_color="#164E63", hover_color="#083344", 
-                                        text_color="#06B6D4", border_width=0, font=("Helvetica", 12, "bold"))
-        self.btn_abandonar = ctk.CTkButton(btn_frame_extra, text="Abandonar", command=self.on_abandonar, 
-                                           corner_radius=30, fg_color="#7F1D1D", hover_color="#450A0A", 
-                                           text_color="#EF4444", border_width=0, font=("Helvetica", 12, "bold"))
-        self.btn_ya_viendo = ctk.CTkButton(btn_frame_extra, text="Ya la estoy viendo", command=self.on_ya_viendo, 
-                                           corner_radius=30, fg_color="#164E63", hover_color="#083344", 
-                                           text_color="#06B6D4", border_width=0, font=("Helvetica", 12, "bold"))
-        self.btn_ya_termine = ctk.CTkButton(btn_frame_extra, text="Ya la terminé", command=self.on_ya_termine, 
-                                            corner_radius=30, fg_color="#064E3B", hover_color="#042F2E", 
-                                            text_color="#10B981", border_width=0, font=("Helvetica", 12, "bold"))
+        self.btn_pausar = ctk.CTkButton(btn_frame_extra, text="⏸ Pausar", command=self.on_pausar, 
+                                        corner_radius=18, fg_color="#1E1B4B", hover_color="#17153B", 
+                                        text_color="#818CF8", border_color="#6366F1", border_width=2, font=("Segoe UI", 12, "bold"))
+        self.btn_abandonar = ctk.CTkButton(btn_frame_extra, text="✕ Abandonar", command=self.on_abandonar, 
+                                           corner_radius=18, fg_color="#7F1D1D", hover_color="#450A0A", 
+                                           text_color="#EF4444", border_color="#DC2626", border_width=2, font=("Segoe UI", 12, "bold"))
+        self.btn_ya_viendo = ctk.CTkButton(btn_frame_extra, text="▶ Ya la estoy viendo", command=self.on_ya_viendo, 
+                                           corner_radius=18, fg_color="#164E63", hover_color="#083344", 
+                                           text_color="#06B6D4", border_color="#0891B2", border_width=2, font=("Segoe UI", 12, "bold"))
+        self.btn_ya_termine = ctk.CTkButton(btn_frame_extra, text="✔ Ya la terminé", command=self.on_ya_termine, 
+                                            corner_radius=18, fg_color="#064E3B", hover_color="#042F2E", 
+                                            text_color="#10B981", border_color="#059669", border_width=2, font=("Segoe UI", 12, "bold"))
 
         # Póster Frame (Aura / Profundidad)
-        self.shadow_frame = ctk.CTkFrame(self.card_frame, fg_color="#2B1A4A", 
-                                         corner_radius=15, border_width=1, border_color="#3C2A5C")
+        self.shadow_frame = ctk.CTkFrame(self.card_frame, fg_color="transparent", 
+                                         corner_radius=16, border_width=3, border_color="#A855F7")
         self.shadow_frame.pack(side='top', pady=(10, 2))
         
         # Póster
@@ -359,8 +359,14 @@ class QueVeoHoyApp:
         self.lbl_titulo = ctk.CTkLabel(self.card_frame, text="Cargando...", font=("Helvetica", 22, "bold"), text_color=COLOR_TEXT, wraplength=480, justify="center")
         self.lbl_titulo.pack(side='top', padx=25, pady=(2, 2))
         
-        self.lbl_detalle = ctk.CTkLabel(self.card_frame, text=" ", font=("Helvetica", 15), text_color="#A0A0B0")
-        self.lbl_detalle.pack(side='top', pady=(0, 6))
+        self.detalle_frame = ctk.CTkFrame(self.card_frame, fg_color="transparent")
+        self.detalle_frame.pack(side='top', pady=(0, 6))
+        
+        self.lbl_badge_tipo = ctk.CTkLabel(self.detalle_frame, text="", fg_color="#3B0764", text_color="#C084FC", corner_radius=8, font=("Segoe UI", 13, "bold"))
+        self.lbl_badge_tipo.pack(side="left", padx=(0, 8))
+        
+        self.lbl_anio = ctk.CTkLabel(self.detalle_frame, text="", text_color="#94A3B8", font=("Segoe UI", 13))
+        self.lbl_anio.pack(side="left")
         
         # Sinopsis (Cambiado a CTkTextbox para evitar recortes y permitir flujo nativo)
         self.lbl_sinopsis = ctk.CTkTextbox(self.card_frame, font=("Helvetica", 14), text_color="#E0E0E5", 
@@ -444,7 +450,8 @@ class QueVeoHoyApp:
                 return
                 
             self.lbl_titulo.configure(text="Cargando...")
-            self.lbl_detalle.configure(text="")
+            self.lbl_badge_tipo.configure(text="")
+            self.lbl_anio.configure(text="")
             self._set_sinopsis("Buscando la mejor recomendación...")
             self.lbl_poster.configure(image=None, text="Cargando...")
             self.btn_pausar.pack_forget()
@@ -502,8 +509,8 @@ class QueVeoHoyApp:
         self.btn_abandonar.pack_forget()
         self.btn_ya_viendo.pack_forget()
         self.btn_ya_termine.pack_forget()
-        self.btn_ya_termine.configure(text="Ya la terminé", state="normal")
-        self.btn_ya_viendo.configure(text="Ya la estoy viendo", state="normal")
+        self.btn_ya_termine.configure(text="✔ Ya la terminé", state="normal")
+        self.btn_ya_viendo.configure(text="▶ Ya la estoy viendo", state="normal")
         
         # Restaurar btn_para_despues si estaba oculto, para mantener orden, se usa before
         if not self.btn_para_despues.winfo_ismapped():
@@ -511,7 +518,8 @@ class QueVeoHoyApp:
         
         if not rec:
             self.lbl_titulo.configure(text="¡No hay nada nuevo para ver!")
-            self.lbl_detalle.configure(text="")
+            self.lbl_badge_tipo.configure(text="")
+            self.lbl_anio.configure(text="")
             self._set_sinopsis("No se encontraron recomendaciones. Intentá más tarde.")
             self.lbl_poster.configure(image=None, text="No content")
             
@@ -535,35 +543,34 @@ class QueVeoHoyApp:
             anio = c.fecha_estreno[:4]
             
         if c.tipo == TIPO_PELICULA:
-            detalle_texto = f"Película • {anio}" if anio else "Película"
+            tipo_texto = "PELÍCULA"
         elif c.es_anime:
-            if c.tipo == TIPO_SERIE:
-                detalle_texto = f"Anime • Serie • {anio}" if anio else "Anime • Serie"
-            else:
-                detalle_texto = f"Anime • Película • {anio}" if anio else "Anime • Película"
+            tipo_texto = "ANIME • SERIE" if c.tipo == TIPO_SERIE else "ANIME • PELÍCULA"
         else:
-            detalle_texto = f"Serie • {anio}" if anio else "Serie"
+            tipo_texto = "SERIE"
+            
+        self.lbl_badge_tipo.configure(text=f" {tipo_texto} ")
             
         uc = repository.obtener_usuario_contenido_por_contenido_id(c.id)
         if c.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
             progreso = repository.obtener_progreso_serie(uc.id)
             if progreso:
-                detalle_texto += f" • T{progreso.temporada_actual} C{progreso.episodio_actual}"
+                anio += f" • T{progreso.temporada_actual} C{progreso.episodio_actual}"
                 
-        self.lbl_detalle.configure(text=detalle_texto)
+        self.lbl_anio.configure(text=f"• {anio}" if anio else "")
         if c.tipo == TIPO_SERIE:
             if uc and uc.estado == ESTADO_EN_PROGRESO:
-                self.btn_visto.configure(text="Capítulo Visto")
+                self.btn_visto.configure(text="✔ Capítulo Visto")
                 self.btn_para_despues.pack_forget()
                 self.btn_pausar.pack(side='left', padx=5)
                 self.btn_abandonar.pack(side='left', padx=5)
             else:
-                self.btn_visto.configure(text="Empezar Serie")
+                self.btn_visto.configure(text="▶ Empezar Serie")
                 if not uc or uc.estado == ESTADO_PARA_DESPUES:
                     self.btn_ya_viendo.pack(side='left', padx=5)
                     self.btn_ya_termine.pack(side='left', padx=5)
         else:
-            self.btn_visto.configure(text="Ya la vi")
+            self.btn_visto.configure(text="✔ Ya la vi")
             
         self._set_sinopsis(c.sinopsis if c.sinopsis else "Sin sinopsis disponible.")
         
@@ -738,25 +745,26 @@ class QueVeoHoyApp:
         header_frame = ctk.CTkFrame(self.prog_list_container, fg_color=COLOR_BG, corner_radius=8)
         header_frame.pack(fill='x', padx=5, pady=5)
         
-        header_frame.grid_columnconfigure(0, weight=1)
-        header_frame.grid_columnconfigure(1, minsize=100)
-        header_frame.grid_columnconfigure(2, minsize=80)
-        header_frame.grid_columnconfigure(3, minsize=120)
+        header_frame.grid_columnconfigure(0, minsize=320, weight=0)
+        header_frame.grid_columnconfigure(1, minsize=110, weight=0)
+        header_frame.grid_columnconfigure(2, minsize=110, weight=0)
+        header_frame.grid_columnconfigure(3, minsize=140, weight=1)
         
-        lbl_h_titulo = ctk.CTkLabel(header_frame, text="TÍTULO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_titulo.grid(row=0, column=0, sticky="w", padx=15, pady=5)
+        lbl_h_titulo = ctk.CTkLabel(header_frame, text="TÍTULO", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_titulo.grid(row=0, column=0, sticky="w", padx=(20, 10), pady=8)
         
-        lbl_h_tipo = ctk.CTkLabel(header_frame, text="TIPO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_tipo.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        lbl_h_tipo = ctk.CTkLabel(header_frame, text="TIPO", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_tipo.grid(row=0, column=1, sticky="w", pady=8)
         
-        lbl_h_avance = ctk.CTkLabel(header_frame, text="AVANCE", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_avance.grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        lbl_h_avance = ctk.CTkLabel(header_frame, text="AVANCE", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_avance.grid(row=0, column=2, sticky="w", pady=8)
         
-        lbl_h_estado = ctk.CTkLabel(header_frame, text="ESTADO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_estado.grid(row=0, column=3, padx=5, pady=5)
+        lbl_h_estado = ctk.CTkLabel(header_frame, text="ESTADO", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_estado.grid(row=0, column=3, sticky="w", pady=8)
         
         # Scrollable Area
-        self.scroll_progreso = ctk.CTkScrollableFrame(self.prog_list_container, fg_color="transparent")
+        self.scroll_progreso = ctk.CTkScrollableFrame(self.prog_list_container, fg_color="transparent",
+                                                      scrollbar_button_color="#2A2A38", scrollbar_button_hover_color="#3F3F50")
         self.scroll_progreso.pack(expand=True, fill='both', padx=0, pady=0)
         
         # Variables de selección
@@ -766,10 +774,10 @@ class QueVeoHoyApp:
         btn_frame = ctk.CTkFrame(self.tab_en_progreso, fg_color="transparent")
         btn_frame.pack(pady=10)
         
-        btn_pausar = ctk.CTkButton(btn_frame, text="⏸ Pausar", command=self.on_progreso_pausar, corner_radius=30, fg_color="#164E63", hover_color="#083344", text_color="#06B6D4", border_width=0, font=("Helvetica", 12, "bold"))
-        btn_reanudar = ctk.CTkButton(btn_frame, text="▶ Reanudar", command=self.on_progreso_reanudar, corner_radius=30, fg_color="#064E3B", hover_color="#042F2E", text_color="#10B981", border_width=0, font=("Helvetica", 12, "bold"))
-        btn_abandonar = ctk.CTkButton(btn_frame, text="✕ Abandonar", command=self.on_progreso_abandonar, corner_radius=30, fg_color="#7F1D1D", hover_color="#450A0A", text_color="#EF4444", border_width=0, font=("Helvetica", 12, "bold"))
-        btn_corregir = ctk.CTkButton(btn_frame, text="✏ Corregir Progreso", command=self.on_progreso_corregir, corner_radius=30, fg_color="#78350F", hover_color="#451A03", text_color="#F59E0B", border_width=0, font=("Helvetica", 12, "bold"))
+        btn_pausar = ctk.CTkButton(btn_frame, text="⏸ Pausar", command=self.on_progreso_pausar, corner_radius=18, fg_color="#78350F", hover_color="#451A03", text_color="#F59E0B", border_color="#F59E0B", border_width=2, font=("Segoe UI", 12, "bold"))
+        btn_reanudar = ctk.CTkButton(btn_frame, text="▶ Reanudar", command=self.on_progreso_reanudar, corner_radius=18, fg_color="#164E63", hover_color="#083344", text_color="#06B6D4", border_color="#06B6D4", border_width=2, font=("Segoe UI", 12, "bold"))
+        btn_abandonar = ctk.CTkButton(btn_frame, text="✕ Abandonar", command=self.on_progreso_abandonar, corner_radius=18, fg_color="#7F1D1D", hover_color="#450A0A", text_color="#EF4444", border_color="#EF4444", border_width=2, font=("Segoe UI", 12, "bold"))
+        btn_corregir = ctk.CTkButton(btn_frame, text="✏ Corregir Progreso", command=self.on_progreso_corregir, corner_radius=18, fg_color="#3B0764", hover_color="#2E054E", text_color="#C084FC", border_color="#C084FC", border_width=2, font=("Segoe UI", 12, "bold"))
         
         btn_pausar.pack(side='left', padx=5)
         btn_reanudar.pack(side='left', padx=5)
@@ -794,30 +802,31 @@ class QueVeoHoyApp:
         self.selected_prog_uc_id = None
         
         items = recommendation.obtener_series_activas()
-        for item in items:
+        for idx, item in enumerate(items):
             avance = f"T{item.temporada_actual} C{item.episodio_actual}"
             estado_legible = "Pausada" if item.estado == "pausada" else "En progreso"
             tipo_legible = "Anime (Serie)" if item.es_anime else "Serie"
             
             # Crear la fila
             row_frame = ctk.CTkFrame(self.scroll_progreso, fg_color="transparent", corner_radius=8, cursor="hand2")
-            row_frame.pack(fill='x', padx=5, pady=2)
+            row_frame.pack(fill='x', padx=5, pady=0)
             
-            row_frame.grid_columnconfigure(0, weight=1)
-            row_frame.grid_columnconfigure(1, minsize=100)
-            row_frame.grid_columnconfigure(2, minsize=120)
-            row_frame.grid_columnconfigure(3, minsize=120)
+            row_frame.grid_columnconfigure(0, minsize=320, weight=0)
+            row_frame.grid_columnconfigure(1, minsize=110, weight=0)
+            row_frame.grid_columnconfigure(2, minsize=110, weight=0)
+            row_frame.grid_columnconfigure(3, minsize=140, weight=1)
             
             lbl_tit = ctk.CTkLabel(row_frame, text=item.titulo, font=FONT_CARD, text_color=COLOR_TEXT, anchor="w", cursor="hand2")
-            lbl_tit.grid(row=0, column=0, sticky="w", padx=15, pady=8)
+            lbl_tit.grid(row=0, column=0, sticky="w", padx=(20, 10), pady=12)
             
             lbl_tipo = ctk.CTkLabel(row_frame, text=tipo_legible, font=FONT_SUB, text_color=COLOR_TEXT_SEC, anchor="w", cursor="hand2")
-            lbl_tipo.grid(row=0, column=1, sticky="w", padx=5, pady=8)
+            lbl_tipo.grid(row=0, column=1, sticky="w", pady=12)
             
             avance_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
-            avance_frame.grid(row=0, column=2, sticky="w", padx=5, pady=8)
+            avance_frame.grid(row=0, column=2, sticky="w", pady=12)
             
-            lbl_avance = ctk.CTkLabel(avance_frame, text=avance, font=FONT_SUB, text_color=COLOR_TEXT, anchor="w", cursor="hand2")
+            # Formatear el texto de avance en cyan claro y ubicarlo alineado
+            lbl_avance = ctk.CTkLabel(avance_frame, text=avance, font=("Segoe UI", 12, "bold"), text_color="#06B6D4", anchor="w", cursor="hand2")
             lbl_avance.pack(side="top", anchor="w")
             
             porcentaje = 0.0
@@ -832,15 +841,20 @@ class QueVeoHoyApp:
                 except Exception:
                     pass
             
-            prog_bar = ctk.CTkProgressBar(avance_frame, width=80, height=6, corner_radius=3, progress_color="#06B6D4", fg_color="#374151")
-            prog_bar.pack(side="top", anchor="w", pady=(2, 0))
+            prog_bar = ctk.CTkProgressBar(avance_frame, width=90, height=6, corner_radius=3, progress_color="#06B6D4", fg_color="#374151")
+            prog_bar.pack(side="top", pady=(4, 0), anchor="w")
             prog_bar.set(porcentaje)
             
             badge_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
-            badge_frame.grid(row=0, column=3, padx=5, pady=8)
+            badge_frame.grid(row=0, column=3, sticky="w", pady=12)
             
             badge = ui_styles.crear_badge_estado(badge_frame, estado_legible)
-            badge.pack()
+            badge.pack(anchor="center")
+            
+            # Separador sutil
+            if idx < len(items) - 1:
+                sep = ctk.CTkFrame(self.scroll_progreso, height=1, fg_color="#232330")
+                sep.pack(fill='x', padx=15)
             
             # Evento de selección
             def on_click(evt, r=row_frame, u=item.usuario_contenido_id):
