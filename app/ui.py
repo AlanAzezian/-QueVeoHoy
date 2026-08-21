@@ -301,7 +301,7 @@ class QueVeoHoyApp:
     # --- PESTAÑA HOY ---
     def setup_tab_hoy(self):
         # Frame central tipo tarjeta
-        self.card_frame = ctk.CTkFrame(self.tab_hoy, fg_color=COLOR_BG, corner_radius=20)
+        self.card_frame = ctk.CTkFrame(self.tab_hoy, fg_color=COLOR_BG_CARD, corner_radius=20)
         self.card_frame.pack(expand=True, fill='both', padx=40, pady=(0, 5))
         
         # Botones anclados abajo (se empaquetan primero para garantizar su visibilidad en el fondo)
@@ -309,15 +309,16 @@ class QueVeoHoyApp:
         btn_frame.pack(side='bottom', pady=(5, 15))
         
         self.btn_visto = ctk.CTkButton(btn_frame, text="Ya la vi", command=self.on_marcar_visto, 
-                                       corner_radius=30, fg_color="transparent", border_width=2, 
-                                       border_color=COLOR_PRIMARY, hover_color=COLOR_DARK, text_color=COLOR_TEXT)
+                                       corner_radius=30, fg_color="#064E3B", hover_color="#042F2E", 
+                                       text_color="#10B981", border_width=0, font=("Helvetica", 12, "bold"))
         
         self.btn_para_despues = ctk.CTkButton(btn_frame, text="Dejar para después", command=self.on_para_despues, 
-                                              corner_radius=30, fg_color="transparent", border_width=2, 
-                                              border_color=COLOR_PRIMARY, hover_color=COLOR_DARK, text_color=COLOR_TEXT)
+                                              corner_radius=30, fg_color="#78350F", hover_color="#451A03", 
+                                              text_color="#F59E0B", border_width=0, font=("Helvetica", 12, "bold"))
                                               
         self.btn_siguiente = ctk.CTkButton(btn_frame, text="Siguiente", command=self.on_siguiente, 
-                                           corner_radius=30, fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER, text_color=COLOR_TEXT)
+                                           corner_radius=30, fg_color=COLOR_PRIMARY, hover_color=COLOR_DARK, 
+                                           text_color=COLOR_TEXT, border_width=0, font=("Helvetica", 12, "bold"))
         
         self.btn_visto.pack(side='left', padx=5)
         self.btn_para_despues.pack(side='left', padx=5)
@@ -328,13 +329,17 @@ class QueVeoHoyApp:
         btn_frame_extra.pack(side='bottom', pady=(0, 5))
         
         self.btn_pausar = ctk.CTkButton(btn_frame_extra, text="Pausar", command=self.on_pausar, 
-                                        corner_radius=30, fg_color="transparent", border_width=1, border_color="#555")
+                                        corner_radius=30, fg_color="#164E63", hover_color="#083344", 
+                                        text_color="#06B6D4", border_width=0, font=("Helvetica", 12, "bold"))
         self.btn_abandonar = ctk.CTkButton(btn_frame_extra, text="Abandonar", command=self.on_abandonar, 
-                                           corner_radius=30, fg_color="transparent", border_width=1, border_color="#555")
+                                           corner_radius=30, fg_color="#7F1D1D", hover_color="#450A0A", 
+                                           text_color="#EF4444", border_width=0, font=("Helvetica", 12, "bold"))
         self.btn_ya_viendo = ctk.CTkButton(btn_frame_extra, text="Ya la estoy viendo", command=self.on_ya_viendo, 
-                                           corner_radius=30, fg_color="transparent", border_width=1, border_color="#555")
+                                           corner_radius=30, fg_color="#164E63", hover_color="#083344", 
+                                           text_color="#06B6D4", border_width=0, font=("Helvetica", 12, "bold"))
         self.btn_ya_termine = ctk.CTkButton(btn_frame_extra, text="Ya la terminé", command=self.on_ya_termine, 
-                                            corner_radius=30, fg_color="transparent", border_width=1, border_color="#555")
+                                            corner_radius=30, fg_color="#064E3B", hover_color="#042F2E", 
+                                            text_color="#10B981", border_width=0, font=("Helvetica", 12, "bold"))
 
         # Póster Frame (Aura / Profundidad)
         self.shadow_frame = ctk.CTkFrame(self.card_frame, fg_color="#2B1A4A", 
@@ -716,50 +721,119 @@ class QueVeoHoyApp:
 
     # --- PESTAÑA EN PROGRESO ---
     def setup_tab_en_progreso(self):
-        self.tree_progreso = ttk.Treeview(self.tab_en_progreso, columns=("ID", "Titulo", "Tipo", "Avance", "Estado", "TipoLegible"), show='headings')
-        self.tree_progreso.heading("Titulo", text="Título", anchor="w")
-        self.tree_progreso.column("Titulo", width=320, minwidth=240, anchor="w")
-        self.tree_progreso.heading("TipoLegible", text="Tipo", anchor="center")
-        self.tree_progreso.column("TipoLegible", width=80, minwidth=70, anchor="center")
-        self.tree_progreso.heading("Avance", text="Avance", anchor="center")
-        self.tree_progreso.column("Avance", width=100, minwidth=80, anchor="center")
-        self.tree_progreso.heading("Estado", text="Estado", anchor="center")
-        self.tree_progreso.column("Estado", width=110, minwidth=90, anchor="center")
+        lbl = ctk.CTkLabel(self.tab_en_progreso, text="Series en progreso o pausadas", font=("Helvetica", 16, "bold"))
+        lbl.pack(pady=10)
         
-        self.tree_progreso.configure(displaycolumns=("Titulo", "TipoLegible", "Avance", "Estado"))
-        self.tree_progreso.pack(expand=True, fill='both', padx=10, pady=10)
+        # --- NUEVA LISTA CUSTOM CON SCROLL ---
+        self.prog_list_container = ctk.CTkFrame(self.tab_en_progreso, fg_color=COLOR_BG_CARD)
+        self.prog_list_container.pack(expand=True, fill='both', padx=10, pady=10)
+        
+        # Header Row
+        header_frame = ctk.CTkFrame(self.prog_list_container, fg_color=COLOR_BG, corner_radius=8)
+        header_frame.pack(fill='x', padx=5, pady=5)
+        
+        header_frame.grid_columnconfigure(0, weight=1)
+        header_frame.grid_columnconfigure(1, minsize=100)
+        header_frame.grid_columnconfigure(2, minsize=80)
+        header_frame.grid_columnconfigure(3, minsize=120)
+        
+        lbl_h_titulo = ctk.CTkLabel(header_frame, text="TÍTULO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_titulo.grid(row=0, column=0, sticky="w", padx=15, pady=5)
+        
+        lbl_h_tipo = ctk.CTkLabel(header_frame, text="TIPO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_tipo.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        
+        lbl_h_avance = ctk.CTkLabel(header_frame, text="AVANCE", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_avance.grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        
+        lbl_h_estado = ctk.CTkLabel(header_frame, text="ESTADO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_estado.grid(row=0, column=3, padx=5, pady=5)
+        
+        # Scrollable Area
+        self.scroll_progreso = ctk.CTkScrollableFrame(self.prog_list_container, fg_color="transparent")
+        self.scroll_progreso.pack(expand=True, fill='both', padx=0, pady=0)
+        
+        # Variables de selección
+        self.selected_prog_uc_id = None
+        self.selected_prog_row_frame = None
         
         btn_frame = ctk.CTkFrame(self.tab_en_progreso, fg_color="transparent")
         btn_frame.pack(pady=10)
         
-        btn_pausar = ctk.CTkButton(btn_frame, text="Pausar", command=self.on_progreso_pausar, corner_radius=30, fg_color="transparent", border_width=1, border_color="#555")
-        btn_abandonar = ctk.CTkButton(btn_frame, text="Abandonar", command=self.on_progreso_abandonar, corner_radius=30, fg_color="transparent", border_width=1, border_color="#555")
-        btn_corregir = ctk.CTkButton(btn_frame, text="Corregir Progreso", command=self.on_progreso_corregir, corner_radius=30, fg_color="transparent", border_width=1, border_color="#555")
-        btn_reanudar = ctk.CTkButton(btn_frame, text="Reanudar", command=self.on_progreso_reanudar, corner_radius=30, fg_color="transparent", border_width=1, border_color="#555")
+        btn_pausar = ctk.CTkButton(btn_frame, text="Pausar", command=self.on_progreso_pausar, corner_radius=30, fg_color="#164E63", hover_color="#083344", text_color="#06B6D4", border_width=0, font=("Helvetica", 12, "bold"))
+        btn_reanudar = ctk.CTkButton(btn_frame, text="Reanudar", command=self.on_progreso_reanudar, corner_radius=30, fg_color="#064E3B", hover_color="#042F2E", text_color="#10B981", border_width=0, font=("Helvetica", 12, "bold"))
+        btn_abandonar = ctk.CTkButton(btn_frame, text="Abandonar", command=self.on_progreso_abandonar, corner_radius=30, fg_color="#7F1D1D", hover_color="#450A0A", text_color="#EF4444", border_width=0, font=("Helvetica", 12, "bold"))
+        btn_corregir = ctk.CTkButton(btn_frame, text="Corregir Progreso", command=self.on_progreso_corregir, corner_radius=30, fg_color="#78350F", hover_color="#451A03", text_color="#F59E0B", border_width=0, font=("Helvetica", 12, "bold"))
         
         btn_pausar.pack(side='left', padx=5)
         btn_reanudar.pack(side='left', padx=5)
         btn_abandonar.pack(side='left', padx=5)
         btn_corregir.pack(side='left', padx=5)
 
+    def select_progreso_row(self, row_frame, uc_id):
+        if self.selected_prog_row_frame:
+            self.selected_prog_row_frame.configure(fg_color="transparent")
+            
+        self.selected_prog_row_frame = row_frame
+        self.selected_prog_uc_id = uc_id
+        
+        # Resaltado sutil
+        row_frame.configure(fg_color="#2A2A35")
+
     def refresh_en_progreso(self):
-        for i in self.tree_progreso.get_children():
-            self.tree_progreso.delete(i)
+        for widget in self.scroll_progreso.winfo_children():
+            widget.destroy()
+            
+        self.selected_prog_row_frame = None
+        self.selected_prog_uc_id = None
         
         items = recommendation.obtener_series_activas()
         for item in items:
             avance = f"T{item.temporada_actual} C{item.episodio_actual}"
             estado_legible = "Pausada" if item.estado == "pausada" else "En progreso"
             tipo_legible = "Anime (Serie)" if item.es_anime else "Serie"
-            self.tree_progreso.insert('', 'end', values=(item.usuario_contenido_id, item.titulo, item.tipo, avance, estado_legible, tipo_legible))
+            
+            # Crear la fila
+            row_frame = ctk.CTkFrame(self.scroll_progreso, fg_color="transparent", corner_radius=8, cursor="hand2")
+            row_frame.pack(fill='x', padx=5, pady=2)
+            
+            row_frame.grid_columnconfigure(0, weight=1)
+            row_frame.grid_columnconfigure(1, minsize=100)
+            row_frame.grid_columnconfigure(2, minsize=80)
+            row_frame.grid_columnconfigure(3, minsize=120)
+            
+            lbl_tit = ctk.CTkLabel(row_frame, text=item.titulo, font=("Helvetica", 12), text_color=COLOR_TEXT, anchor="w", cursor="hand2")
+            lbl_tit.grid(row=0, column=0, sticky="w", padx=15, pady=8)
+            
+            lbl_tipo = ctk.CTkLabel(row_frame, text=tipo_legible, font=("Helvetica", 12), text_color=COLOR_TEXT_SEC, anchor="w", cursor="hand2")
+            lbl_tipo.grid(row=0, column=1, sticky="w", padx=5, pady=8)
+            
+            lbl_avance = ctk.CTkLabel(row_frame, text=avance, font=("Helvetica", 12, "bold"), text_color=COLOR_TEXT, anchor="w", cursor="hand2")
+            lbl_avance.grid(row=0, column=2, sticky="w", padx=5, pady=8)
+            
+            badge_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
+            badge_frame.grid(row=0, column=3, padx=5, pady=8)
+            
+            badge = ui_styles.crear_badge_estado(badge_frame, estado_legible)
+            badge.pack()
+            
+            # Evento de selección
+            def on_click(evt, r=row_frame, u=item.usuario_contenido_id):
+                self.select_progreso_row(r, u)
+                
+            row_frame.bind("<Button-1>", on_click)
+            lbl_tit.bind("<Button-1>", on_click)
+            lbl_tipo.bind("<Button-1>", on_click)
+            lbl_avance.bind("<Button-1>", on_click)
+            badge_frame.bind("<Button-1>", on_click)
+            badge.bind("<Button-1>", on_click)
 
     def on_progreso_reanudar(self):
-        selected = self.tree_progreso.selection()
-        if not selected:
-            messagebox.showwarning("Aviso", "Seleccione una serie")
+        if not self.selected_prog_uc_id:
+            messagebox.showwarning("Aviso", "Seleccione una serie haciendo clic en la fila.")
             return
             
-        uc_id = self.tree_progreso.item(selected[0])['values'][0]
+        uc_id = self.selected_prog_uc_id
         try:
             recommendation.reanudar_serie(uc_id)
             self.show_toast("Serie reanudada y lista en Hoy")
@@ -780,12 +854,11 @@ class QueVeoHoyApp:
             messagebox.showerror("Error", str(e))
 
     def on_progreso_pausar(self):
-        selected = self.tree_progreso.selection()
-        if not selected:
-            messagebox.showwarning("Aviso", "Seleccione una serie")
+        if not self.selected_prog_uc_id:
+            messagebox.showwarning("Aviso", "Seleccione una serie haciendo clic en la fila.")
             return
         
-        uc_id = self.tree_progreso.item(selected[0])['values'][0]
+        uc_id = self.selected_prog_uc_id
         try:
             recommendation.pausar_serie(uc_id)
             self.show_toast("Serie pausada.")
@@ -794,12 +867,11 @@ class QueVeoHoyApp:
             messagebox.showerror("Error", str(e))
 
     def on_progreso_abandonar(self):
-        selected = self.tree_progreso.selection()
-        if not selected:
-            messagebox.showwarning("Aviso", "Seleccione una serie")
+        if not self.selected_prog_uc_id:
+            messagebox.showwarning("Aviso", "Seleccione una serie haciendo clic en la fila.")
             return
             
-        uc_id = self.tree_progreso.item(selected[0])['values'][0]
+        uc_id = self.selected_prog_uc_id
         try:
             recommendation.abandonar(uc_id)
             self.show_toast("Serie abandonada.")
@@ -808,12 +880,11 @@ class QueVeoHoyApp:
             messagebox.showerror("Error", str(e))
 
     def on_progreso_corregir(self):
-        selected = self.tree_progreso.selection()
-        if not selected:
-            messagebox.showwarning("Aviso", "Seleccione una serie")
+        if not self.selected_prog_uc_id:
+            messagebox.showwarning("Aviso", "Seleccione una serie haciendo clic en la fila.")
             return
             
-        uc_id = self.tree_progreso.item(selected[0])['values'][0]
+        uc_id = self.selected_prog_uc_id
         
         dialog = ctk.CTkInputDialog(text="¿En qué temporada vas?", title="Corregir Progreso")
         temp = dialog.get_input()
