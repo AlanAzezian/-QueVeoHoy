@@ -4,6 +4,7 @@ import customtkinter as ctk
 import urllib.request
 import io
 import threading
+import os
 
 try:
     from PIL import Image, ImageTk
@@ -167,6 +168,13 @@ class QueVeoHoyApp:
     def __init__(self, root):
         self.root = root
         self.root.title("QuéVeoHoy")
+        
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        icon_path = os.path.join(base_dir, "assets", "icon.ico")
+        try:
+            self.root.iconbitmap(icon_path)
+        except Exception as e:
+            print(f"Error cargando el icono: {e}")
         
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
