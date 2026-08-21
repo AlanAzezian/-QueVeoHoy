@@ -26,13 +26,18 @@ from . import ui_styles
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-COLOR_BG = "#0D0D12"
-COLOR_BG_CARD = "#1A1A1F"
+COLOR_BG = "#121218"
+COLOR_BG_CARD = "#1E1E28"
 COLOR_PRIMARY = "#7F4FE0"
 COLOR_HOVER = "#A78BFA"
 COLOR_DARK = "#6D28D9"
 COLOR_TEXT = "#FFFFFF"
-COLOR_TEXT_SEC = "#B0B0B8"
+COLOR_TEXT_SEC = "#94A3B8"
+
+FONT_MAIN = "Segoe UI"
+FONT_TITLE = (FONT_MAIN, 18, "bold")
+FONT_CARD = (FONT_MAIN, 14, "bold")
+FONT_SUB = (FONT_MAIN, 12)
 
 # --- CONFIGURACIÓN MANUAL DE VENTANA ---
 # Editá estos valores a mano para probar el tamaño que mejor se ajuste a tu pantalla.
@@ -370,12 +375,13 @@ class QueVeoHoyApp:
         self.lbl_sinopsis.tag_add("center", "1.0", "end")
         self.lbl_sinopsis.configure(state="disabled")
 
-    def _download_poster(self, url):
+    def _download_poster(self, url, size=(180, 270)):
         if not HAS_PILLOW or not url:
             return None
             
-        if url in self.poster_cache:
-            return self.poster_cache[url]
+        cache_key = (url, size)
+        if cache_key in self.poster_cache:
+            return self.poster_cache[cache_key]
             
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -383,8 +389,8 @@ class QueVeoHoyApp:
             im = Image.open(io.BytesIO(raw_data))
             
             # Cambiamos la escala original para garantizar que todo quepa en la ventana sin colapsar
-            img = ctk.CTkImage(light_image=im, dark_image=im, size=(180, 270))
-            self.poster_cache[url] = img
+            img = ctk.CTkImage(light_image=im, dark_image=im, size=size)
+            self.poster_cache[cache_key] = img
             return img
         except Exception as e:
             print("Error loading image:", e)
@@ -760,10 +766,10 @@ class QueVeoHoyApp:
         btn_frame = ctk.CTkFrame(self.tab_en_progreso, fg_color="transparent")
         btn_frame.pack(pady=10)
         
-        btn_pausar = ctk.CTkButton(btn_frame, text="Pausar", command=self.on_progreso_pausar, corner_radius=30, fg_color="#164E63", hover_color="#083344", text_color="#06B6D4", border_width=0, font=("Helvetica", 12, "bold"))
-        btn_reanudar = ctk.CTkButton(btn_frame, text="Reanudar", command=self.on_progreso_reanudar, corner_radius=30, fg_color="#064E3B", hover_color="#042F2E", text_color="#10B981", border_width=0, font=("Helvetica", 12, "bold"))
-        btn_abandonar = ctk.CTkButton(btn_frame, text="Abandonar", command=self.on_progreso_abandonar, corner_radius=30, fg_color="#7F1D1D", hover_color="#450A0A", text_color="#EF4444", border_width=0, font=("Helvetica", 12, "bold"))
-        btn_corregir = ctk.CTkButton(btn_frame, text="Corregir Progreso", command=self.on_progreso_corregir, corner_radius=30, fg_color="#78350F", hover_color="#451A03", text_color="#F59E0B", border_width=0, font=("Helvetica", 12, "bold"))
+        btn_pausar = ctk.CTkButton(btn_frame, text="⏸ Pausar", command=self.on_progreso_pausar, corner_radius=30, fg_color="#164E63", hover_color="#083344", text_color="#06B6D4", border_width=0, font=("Helvetica", 12, "bold"))
+        btn_reanudar = ctk.CTkButton(btn_frame, text="▶ Reanudar", command=self.on_progreso_reanudar, corner_radius=30, fg_color="#064E3B", hover_color="#042F2E", text_color="#10B981", border_width=0, font=("Helvetica", 12, "bold"))
+        btn_abandonar = ctk.CTkButton(btn_frame, text="✕ Abandonar", command=self.on_progreso_abandonar, corner_radius=30, fg_color="#7F1D1D", hover_color="#450A0A", text_color="#EF4444", border_width=0, font=("Helvetica", 12, "bold"))
+        btn_corregir = ctk.CTkButton(btn_frame, text="✏ Corregir Progreso", command=self.on_progreso_corregir, corner_radius=30, fg_color="#78350F", hover_color="#451A03", text_color="#F59E0B", border_width=0, font=("Helvetica", 12, "bold"))
         
         btn_pausar.pack(side='left', padx=5)
         btn_reanudar.pack(side='left', padx=5)
@@ -799,17 +805,36 @@ class QueVeoHoyApp:
             
             row_frame.grid_columnconfigure(0, weight=1)
             row_frame.grid_columnconfigure(1, minsize=100)
-            row_frame.grid_columnconfigure(2, minsize=80)
+            row_frame.grid_columnconfigure(2, minsize=120)
             row_frame.grid_columnconfigure(3, minsize=120)
             
-            lbl_tit = ctk.CTkLabel(row_frame, text=item.titulo, font=("Helvetica", 12), text_color=COLOR_TEXT, anchor="w", cursor="hand2")
+            lbl_tit = ctk.CTkLabel(row_frame, text=item.titulo, font=FONT_CARD, text_color=COLOR_TEXT, anchor="w", cursor="hand2")
             lbl_tit.grid(row=0, column=0, sticky="w", padx=15, pady=8)
             
-            lbl_tipo = ctk.CTkLabel(row_frame, text=tipo_legible, font=("Helvetica", 12), text_color=COLOR_TEXT_SEC, anchor="w", cursor="hand2")
+            lbl_tipo = ctk.CTkLabel(row_frame, text=tipo_legible, font=FONT_SUB, text_color=COLOR_TEXT_SEC, anchor="w", cursor="hand2")
             lbl_tipo.grid(row=0, column=1, sticky="w", padx=5, pady=8)
             
-            lbl_avance = ctk.CTkLabel(row_frame, text=avance, font=("Helvetica", 12, "bold"), text_color=COLOR_TEXT, anchor="w", cursor="hand2")
-            lbl_avance.grid(row=0, column=2, sticky="w", padx=5, pady=8)
+            avance_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
+            avance_frame.grid(row=0, column=2, sticky="w", padx=5, pady=8)
+            
+            lbl_avance = ctk.CTkLabel(avance_frame, text=avance, font=FONT_SUB, text_color=COLOR_TEXT, anchor="w", cursor="hand2")
+            lbl_avance.pack(side="top", anchor="w")
+            
+            porcentaje = 0.0
+            meta = repository.obtener_tv_metadata(item.contenido_id)
+            if meta and meta['temporadas_json']:
+                import json
+                try:
+                    t_dict = json.loads(meta['temporadas_json'])
+                    max_eps = t_dict.get(str(item.temporada_actual), 0)
+                    if max_eps > 0:
+                        porcentaje = min(item.episodio_actual / max_eps, 1.0)
+                except Exception:
+                    pass
+            
+            prog_bar = ctk.CTkProgressBar(avance_frame, width=80, height=6, corner_radius=3, progress_color="#06B6D4", fg_color="#374151")
+            prog_bar.pack(side="top", anchor="w", pady=(2, 0))
+            prog_bar.set(porcentaje)
             
             badge_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
             badge_frame.grid(row=0, column=3, padx=5, pady=8)
@@ -824,7 +849,9 @@ class QueVeoHoyApp:
             row_frame.bind("<Button-1>", on_click)
             lbl_tit.bind("<Button-1>", on_click)
             lbl_tipo.bind("<Button-1>", on_click)
+            avance_frame.bind("<Button-1>", on_click)
             lbl_avance.bind("<Button-1>", on_click)
+            prog_bar.bind("<Button-1>", on_click)
             badge_frame.bind("<Button-1>", on_click)
             badge.bind("<Button-1>", on_click)
 
@@ -1397,37 +1424,65 @@ class QueVeoHoyApp:
             card = ctk.CTkFrame(self.scroll_buscar, fg_color=COLOR_BG_CARD, corner_radius=12)
             card.pack(fill='x', padx=10, pady=5)
             
-            card.grid_columnconfigure(0, weight=1)
-            card.grid_columnconfigure(1, minsize=100)
-            card.grid_columnconfigure(2, minsize=150)
+            card.grid_columnconfigure(0, minsize=60) # Poster
+            card.grid_columnconfigure(1, weight=1)   # Titulo
+            card.grid_columnconfigure(2, minsize=100) # Badge
+            card.grid_columnconfigure(3, minsize=160) # Accion
             
-            lbl_tit = ctk.CTkLabel(card, text=c.titulo, font=("Helvetica", 14, "bold"), text_color=COLOR_TEXT, anchor="w")
-            lbl_tit.grid(row=0, column=0, sticky="w", padx=15, pady=12)
+            poster_lbl = ctk.CTkLabel(card, text="", width=60, height=90, fg_color="#2B1A4A", corner_radius=8)
+            poster_lbl.grid(row=0, column=0, padx=10, pady=10)
+            
+            if c.poster_url:
+                def _load_img(url, lbl):
+                    img = self._download_poster(url, size=(60, 90))
+                    if img:
+                        self.root.after(0, lambda: lbl.configure(image=img, text=""))
+                threading.Thread(target=_load_img, args=(c.poster_url, poster_lbl), daemon=True).start()
+            
+            lbl_tit = ctk.CTkLabel(card, text=c.titulo, font=FONT_CARD, text_color=COLOR_TEXT, anchor="w", wraplength=200)
+            lbl_tit.grid(row=0, column=1, sticky="w", padx=10, pady=12)
             
             badge_frame = ctk.CTkFrame(card, fg_color="transparent")
-            badge_frame.grid(row=0, column=1, padx=10, pady=12)
+            badge_frame.grid(row=0, column=2, padx=10, pady=12)
             
             tipo_label = "Anime" if c.es_anime else ("Película" if c.tipo == TIPO_PELICULA else "Serie")
             badge = ui_styles.crear_badge_estado(badge_frame, tipo_label)
             badge.pack()
             
             action_frame = ctk.CTkFrame(card, fg_color="transparent")
-            action_frame.grid(row=0, column=2, padx=15, pady=12, sticky="e")
+            action_frame.grid(row=0, column=3, padx=15, pady=12, sticky="e")
             
             estado = repository.obtener_estado_en_biblioteca(c)
+            
+            def handle_action(choice, i=idx, is_movie=(c.tipo == TIPO_PELICULA)):
+                if choice == "📌 Para después":
+                    self.on_buscar_para_despues(i)
+                elif choice == "✔ Ya la vi (Terminada)":
+                    if is_movie:
+                        self.on_buscar_ya_vi(i)
+                    else:
+                        self.on_buscar_ya_termine(i)
+                elif choice == "▶ Empezar ahora (En progreso)":
+                    self.on_buscar_empezar(i)
+                elif choice.startswith("📌 En Biblioteca"):
+                    pass # Solo lectura o se podria extender
+                    
+            options = ["📌 Para después", "✔ Ya la vi (Terminada)"]
+            if c.tipo != TIPO_PELICULA:
+                options = ["📌 Para después", "▶ Empezar ahora (En progreso)", "✔ Ya la vi (Terminada)"]
+                
             if estado:
                 estado_legible = ESTADOS_LEGIBLES.get(estado, estado)
-                lbl_est = ctk.CTkLabel(action_frame, text=f"📌 En Biblioteca ({estado_legible})", text_color="#A78BFA", font=("Helvetica", 11, "bold"))
-                lbl_est.pack(side="right")
+                current_val = f"📌 En Biblioteca ({estado_legible})"
+                opt_menu = ctk.CTkOptionMenu(action_frame, values=[current_val] + options, command=handle_action,
+                                             fg_color="#374151", button_color="#4B5563", button_hover_color="#6B7280", font=FONT_SUB)
+                opt_menu.set(current_val)
+                opt_menu.pack(side="right")
             else:
-                if c.tipo == TIPO_PELICULA:
-                    cmd = lambda i=idx: self.on_buscar_para_despues(i)
-                else:
-                    cmd = lambda i=idx: self.on_buscar_empezar(i)
-                    
-                btn_add = ctk.CTkButton(action_frame, text="+ Añadir a mi lista", command=cmd,
-                                        corner_radius=30, fg_color="#10B981", hover_color="#059669", text_color="#FFFFFF")
-                btn_add.pack(side="right")
+                opt_menu = ctk.CTkOptionMenu(action_frame, values=["+ Añadir a mi lista..."] + options, command=handle_action,
+                                             fg_color="#10B981", button_color="#059669", button_hover_color="#047857", font=FONT_SUB)
+                opt_menu.set("+ Añadir a mi lista...")
+                opt_menu.pack(side="right")
 
     def on_buscar_select(self, event):
         selected = self.tree_buscar.selection()
