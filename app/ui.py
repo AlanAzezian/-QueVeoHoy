@@ -1187,6 +1187,40 @@ class QueVeoHoyApp:
         self.entry_buscar_historial.pack(side='left', padx=15)
         self.entry_buscar_historial.bind("<KeyRelease>", lambda e: self.refresh_historial())
         
+        # Container
+        self.hist_list_container = ctk.CTkFrame(self.tab_historial, fg_color=COLOR_BG_CARD)
+        self.hist_list_container.pack(expand=True, fill='both', padx=10, pady=(5, 0))
+        
+        # Header Row
+        header_frame = ctk.CTkFrame(self.hist_list_container, fg_color=COLOR_BG, corner_radius=8)
+        header_frame.pack(fill='x', padx=5, pady=5)
+        
+        header_frame.grid_columnconfigure(0, minsize=100) # Fecha
+        header_frame.grid_columnconfigure(1, weight=1)    # Titulo
+        header_frame.grid_columnconfigure(2, minsize=120) # Tipo
+        header_frame.grid_columnconfigure(3, minsize=140) # Evento
+        
+        lbl_h_fecha = ctk.CTkLabel(header_frame, text="FECHA", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_fecha.grid(row=0, column=0, sticky="w", padx=15, pady=5)
+        
+        lbl_h_titulo = ctk.CTkLabel(header_frame, text="TÍTULO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_titulo.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        
+        lbl_h_tipo = ctk.CTkLabel(header_frame, text="TIPO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_tipo.grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        
+        lbl_h_evento = ctk.CTkLabel(header_frame, text="EVENTO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_evento.grid(row=0, column=3, padx=5, pady=5)
+        
+        # Scrollable Area
+        self.scroll_historial = ctk.CTkScrollableFrame(self.hist_list_container, fg_color="transparent")
+        self.scroll_historial.pack(expand=True, fill='both', padx=0, pady=0)
+        
+        # Variables de selección
+        self.selected_hist_c_id = None
+        self.selected_hist_tipo = None
+        self.selected_hist_row_frame = None
+        
         self.historial_btn_frame = ctk.CTkFrame(self.tab_historial, fg_color="transparent")
         self.historial_btn_frame.pack(side='bottom', pady=15)
         
@@ -1194,23 +1228,26 @@ class QueVeoHoyApp:
                                       corner_radius=30, fg_color="#6D28D9", hover_color="#7C3AED",
                                       text_color="#FFFFFF", text_color_disabled="#FFFFFF")
         self.btn_hist_accion.pack(side='left', padx=5)
+
+    def select_historial_row(self, row_frame, c_id, tipo):
+        if self.selected_hist_row_frame:
+            self.selected_hist_row_frame.configure(fg_color="transparent")
+            
+        self.selected_hist_row_frame = row_frame
+        self.selected_hist_c_id = c_id
+        self.selected_hist_tipo = tipo
         
-        self.tree_hist = ttk.Treeview(self.tab_historial, columns=("ID", "Fecha", "Titulo", "Tipo", "Evento", "Detalle"), displaycolumns=("Fecha", "Titulo", "Tipo", "Evento"), show='headings')
-        self.tree_hist.heading("Fecha", text="Fecha", anchor="w")
-        self.tree_hist.column("Fecha", width=90, minwidth=85, anchor="w")
-        self.tree_hist.heading("Titulo", text="Título", anchor="w")
-        self.tree_hist.column("Titulo", width=290, minwidth=230, anchor="w")
-        self.tree_hist.heading("Tipo", text="Tipo", anchor="center")
-        self.tree_hist.column("Tipo", width=140, minwidth=130, anchor="center")
-        self.tree_hist.heading("Evento", text="Evento", anchor="center")
-        self.tree_hist.column("Evento", width=135, minwidth=120, anchor="center")
-        self.tree_hist.pack(side='top', fill='both', expand=True, padx=20, pady=(5, 10))
-        
-        self.tree_hist.bind("<<TreeviewSelect>>", self.on_historial_select)
+        # Resaltado sutil
+        row_frame.configure(fg_color="#2A2A35")
+        self.on_historial_select()
 
     def refresh_historial(self):
-        for i in self.tree_hist.get_children():
-            self.tree_hist.delete(i)
+        for widget in self.scroll_historial.winfo_children():
+            widget.destroy()
+            
+        self.selected_hist_row_frame = None
+        self.selected_hist_c_id = None
+        self.selected_hist_tipo = None
             
         items = repository.obtener_historial_recomendaciones(limit=100)
         search_term = self.entry_buscar_historial.get().lower()
@@ -1222,7 +1259,8 @@ class QueVeoHoyApp:
             "YA_LA_VI": "Ya la vi",
             "SIGUIENTE": "Siguiente",
             "RECOMENDADA_HOY": "Recomendada",
-            "EMPEZAR_EN_PROGRESO": "En progreso"
+            "EMPEZAR_EN_PROGRESO": "En progreso",
+            "TERMINADA": "Terminada"
         }
         
         for h in items:
@@ -1233,7 +1271,6 @@ class QueVeoHoyApp:
                 continue
                 
             titulo = c.titulo if c else "Desconocido"
-            
             tipo = self._get_tipo_legible(c)
             
             raw_evento = h.accion if h.accion else ""
@@ -1242,37 +1279,66 @@ class QueVeoHoyApp:
             if search_term and search_term not in titulo.lower():
                 continue
                 
-            self.tree_hist.insert('', 'end', values=(h.contenido_id, fecha_str, titulo, tipo, evento, f"Mostrada {h.veces_mostrada} veces"))
+            # Crear la fila
+            row_frame = ctk.CTkFrame(self.scroll_historial, fg_color="transparent", corner_radius=8, cursor="hand2")
+            row_frame.pack(fill='x', padx=5, pady=2)
             
-        self.on_historial_select(None)
+            row_frame.grid_columnconfigure(0, minsize=100)
+            row_frame.grid_columnconfigure(1, weight=1)
+            row_frame.grid_columnconfigure(2, minsize=120)
+            row_frame.grid_columnconfigure(3, minsize=140)
+            
+            lbl_fecha = ctk.CTkLabel(row_frame, text=fecha_str, font=("Helvetica", 11), text_color=COLOR_TEXT_SEC, anchor="w", cursor="hand2")
+            lbl_fecha.grid(row=0, column=0, sticky="w", padx=15, pady=8)
+            
+            lbl_tit = ctk.CTkLabel(row_frame, text=titulo, font=("Helvetica", 12, "bold"), text_color=COLOR_TEXT, anchor="w", cursor="hand2")
+            lbl_tit.grid(row=0, column=1, sticky="w", padx=5, pady=8)
+            
+            lbl_tipo = ctk.CTkLabel(row_frame, text=tipo, font=("Helvetica", 12), text_color=COLOR_TEXT_SEC, anchor="w", cursor="hand2")
+            lbl_tipo.grid(row=0, column=2, sticky="w", padx=5, pady=8)
+            
+            badge_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
+            badge_frame.grid(row=0, column=3, padx=5, pady=8)
+            
+            badge = ui_styles.crear_badge_estado(badge_frame, evento)
+            badge.pack()
+            
+            # Evento de selección
+            def on_click(evt, r=row_frame, cid=h.contenido_id, t=tipo):
+                self.select_historial_row(r, cid, t)
+                
+            row_frame.bind("<Button-1>", on_click)
+            lbl_fecha.bind("<Button-1>", on_click)
+            lbl_tit.bind("<Button-1>", on_click)
+            lbl_tipo.bind("<Button-1>", on_click)
+            badge_frame.bind("<Button-1>", on_click)
+            badge.bind("<Button-1>", on_click)
+            
+        self.on_historial_select()
 
-    def on_historial_select(self, event):
-        selected = self.tree_hist.selection()
-        if not selected:
+    def on_historial_select(self):
+        if not self.selected_hist_c_id:
             self.btn_hist_accion.configure(text="Seleccionar...", state="disabled", command=None)
             return
             
-        item = self.tree_hist.item(selected[0])
-        tipo = item['values'][3]
+        tipo = self.selected_hist_tipo
         
-        if tipo == "Película":
+        if "Película" in tipo:
             self.btn_hist_accion.configure(text="Ya la vi", state="normal", command=self.on_historial_movie)
-        elif tipo == "Serie":
+        elif "Serie" in tipo:
             self.btn_hist_accion.configure(text="Empezar a ver", state="normal", command=self.on_historial_serie)
 
     def on_historial_movie(self):
-        selected = self.tree_hist.selection()
-        if not selected: return
-        c_id = self.tree_hist.item(selected[0])['values'][0]
+        if not self.selected_hist_c_id: return
+        c_id = self.selected_hist_c_id
         uc = recommendation.agregar_a_biblioteca(c_id)
         recommendation.marcar_vista_pelicula(uc.id)
         self.show_toast("Película marcada como vista.")
         self.refrescar_todo()
 
     def on_historial_serie(self):
-        selected = self.tree_hist.selection()
-        if not selected: return
-        c_id = self.tree_hist.item(selected[0])['values'][0]
+        if not self.selected_hist_c_id: return
+        c_id = self.selected_hist_c_id
         uc = recommendation.agregar_a_biblioteca(c_id)
         progreso = repository.obtener_progreso_serie(uc.id)
         if progreso:
@@ -1295,36 +1361,8 @@ class QueVeoHoyApp:
                                    corner_radius=30, fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER)
         btn_buscar.pack(side='left', padx=5)
         
-        self.tree_buscar = ttk.Treeview(self.tab_buscar, columns=("ID", "Titulo", "Tipo", "Anime"), show='headings')
-        self.tree_buscar.heading("ID", text="ID", anchor="w")
-        self.tree_buscar.column("ID", width=45, minwidth=40, anchor="w")
-        self.tree_buscar.heading("Titulo", text="Título", anchor="w")
-        self.tree_buscar.column("Titulo", width=320, minwidth=250, anchor="w")
-        self.tree_buscar.heading("Tipo", text="Tipo", anchor="center")
-        self.tree_buscar.column("Tipo", width=100, minwidth=80, anchor="center")
-        self.tree_buscar.heading("Anime", text="¿Es Anime?", anchor="center")
-        self.tree_buscar.column("Anime", width=100, minwidth=80, anchor="center")
-        self.tree_buscar.pack(expand=True, fill='both', padx=10, pady=5)
-        self.tree_buscar.bind("<<TreeviewSelect>>", self.on_buscar_select)
-        
-        self.btn_frame_buscar = ctk.CTkFrame(self.tab_buscar, fg_color="transparent")
-        self.btn_frame_buscar.pack(pady=10)
-        
-        # Botones para películas
-        self.btn_buscar_para_despues = ctk.CTkButton(self.btn_frame_buscar, text="Dejar para después", command=self.on_buscar_para_despues,
-                                     corner_radius=30, fg_color="transparent", border_width=2, border_color=COLOR_PRIMARY, text_color=COLOR_TEXT)
-        self.btn_buscar_ya_vi = ctk.CTkButton(self.btn_frame_buscar, text="Ya la vi", command=self.on_buscar_ya_vi,
-                                     corner_radius=30, fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER)
-                                     
-        # Botones para series/anime
-        self.btn_buscar_empezar = ctk.CTkButton(self.btn_frame_buscar, text="Empezar Serie", command=self.on_buscar_empezar,
-                                     corner_radius=30, fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER)
-        self.btn_buscar_ya_viendo = ctk.CTkButton(self.btn_frame_buscar, text="Ya la estoy viendo", command=self.on_buscar_ya_viendo,
-                                     corner_radius=30, fg_color="transparent", border_width=1, border_color="#555")
-        self.btn_buscar_ya_termine = ctk.CTkButton(self.btn_frame_buscar, text="Ya la terminé", command=self.on_buscar_ya_termine,
-                                     corner_radius=30, fg_color="transparent", border_width=1, border_color="#555")
-        
-        self.lbl_buscar_estado = ctk.CTkLabel(self.btn_frame_buscar, text="", text_color="#A78BFA", font=("Helvetica", 12, "bold"))
+        self.scroll_buscar = ctk.CTkScrollableFrame(self.tab_buscar, fg_color="transparent")
+        self.scroll_buscar.pack(expand=True, fill='both', padx=10, pady=5)
         
         self.resultados_busqueda = []
 
@@ -1332,12 +1370,8 @@ class QueVeoHoyApp:
         query = self.entry_buscar_online.get().strip()
         if not query: return
         
-        for i in self.tree_buscar.get_children():
-            self.tree_buscar.delete(i)
-            
-        # Ocultar todos los botones
-        for w in self.btn_frame_buscar.winfo_children():
-            w.pack_forget()
+        for w in self.scroll_buscar.winfo_children():
+            w.destroy()
             
         btn = self.entry_buscar_online.master.winfo_children()[1]
         btn.configure(text="Buscando...", state="disabled")
@@ -1355,8 +1389,45 @@ class QueVeoHoyApp:
 
     def _mostrar_resultados_busqueda(self, resultados):
         self.resultados_busqueda = resultados
+        
+        for w in self.scroll_buscar.winfo_children():
+            w.destroy()
+            
         for idx, c in enumerate(resultados):
-            self.tree_buscar.insert('', 'end', values=(idx, c.titulo, c.tipo, "Sí" if c.es_anime else "No"))
+            card = ctk.CTkFrame(self.scroll_buscar, fg_color=COLOR_BG_CARD, corner_radius=12)
+            card.pack(fill='x', padx=10, pady=5)
+            
+            card.grid_columnconfigure(0, weight=1)
+            card.grid_columnconfigure(1, minsize=100)
+            card.grid_columnconfigure(2, minsize=150)
+            
+            lbl_tit = ctk.CTkLabel(card, text=c.titulo, font=("Helvetica", 14, "bold"), text_color=COLOR_TEXT, anchor="w")
+            lbl_tit.grid(row=0, column=0, sticky="w", padx=15, pady=12)
+            
+            badge_frame = ctk.CTkFrame(card, fg_color="transparent")
+            badge_frame.grid(row=0, column=1, padx=10, pady=12)
+            
+            tipo_label = "Anime" if c.es_anime else ("Película" if c.tipo == TIPO_PELICULA else "Serie")
+            badge = ui_styles.crear_badge_estado(badge_frame, tipo_label)
+            badge.pack()
+            
+            action_frame = ctk.CTkFrame(card, fg_color="transparent")
+            action_frame.grid(row=0, column=2, padx=15, pady=12, sticky="e")
+            
+            estado = repository.obtener_estado_en_biblioteca(c)
+            if estado:
+                estado_legible = ESTADOS_LEGIBLES.get(estado, estado)
+                lbl_est = ctk.CTkLabel(action_frame, text=f"📌 En Biblioteca ({estado_legible})", text_color="#A78BFA", font=("Helvetica", 11, "bold"))
+                lbl_est.pack(side="right")
+            else:
+                if c.tipo == TIPO_PELICULA:
+                    cmd = lambda i=idx: self.on_buscar_para_despues(i)
+                else:
+                    cmd = lambda i=idx: self.on_buscar_empezar(i)
+                    
+                btn_add = ctk.CTkButton(action_frame, text="+ Añadir a mi lista", command=cmd,
+                                        corner_radius=30, fg_color="#10B981", hover_color="#059669", text_color="#FFFFFF")
+                btn_add.pack(side="right")
 
     def on_buscar_select(self, event):
         selected = self.tree_buscar.selection()
@@ -1396,30 +1467,25 @@ class QueVeoHoyApp:
             
         return c_db
 
-    def on_buscar_para_despues(self):
-        selected = self.tree_buscar.selection()
-        if not selected: return
-        idx = int(self.tree_buscar.item(selected[0])['values'][0])
+    def on_buscar_para_despues(self, idx=None):
+        if idx is None: return
         
         def _process():
             try:
                 c_db = self._asegurar_contenido_bd(idx)
                 uc = recommendation.agregar_a_biblioteca(c_db.id)
-                # Actualizar estado y registrar en historial
                 repository.actualizar_estado_usuario_contenido(uc.id, ESTADO_PARA_DESPUES)
                 repository.upsert_historial_recomendacion(c_db.id, "PARA_DESPUES")
                 
                 self.root.after(0, lambda: self.show_toast(f"'{c_db.titulo}' añadido para después."))
                 self.root.after(0, self.refrescar_todo)
-                self.root.after(0, lambda: self.on_buscar_select(None))
+                self.root.after(0, lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
         threading.Thread(target=_process, daemon=True).start()
         
-    def on_buscar_ya_vi(self):
-        selected = self.tree_buscar.selection()
-        if not selected: return
-        idx = int(self.tree_buscar.item(selected[0])['values'][0])
+    def on_buscar_ya_vi(self, idx=None):
+        if idx is None: return
         
         def _process():
             try:
@@ -1431,22 +1497,19 @@ class QueVeoHoyApp:
                 
                 self.root.after(0, lambda: self.show_toast(f"'{c_db.titulo}' marcada como vista."))
                 self.root.after(0, self.refrescar_todo)
-                self.root.after(0, lambda: self.on_buscar_select(None))
+                self.root.after(0, lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
         threading.Thread(target=_process, daemon=True).start()
         
-    def on_buscar_empezar(self):
-        selected = self.tree_buscar.selection()
-        if not selected: return
-        idx = int(self.tree_buscar.item(selected[0])['values'][0])
+    def on_buscar_empezar(self, idx=None):
+        if idx is None: return
         
         def _process():
             try:
                 c_db = self._asegurar_contenido_bd(idx)
                 uc = recommendation.agregar_a_biblioteca(c_db.id)
                 
-                # Check if already in progress
                 progreso = repository.obtener_progreso_serie(uc.id)
                 if progreso:
                     self.root.after(0, lambda: messagebox.showwarning("Aviso", "Ya estabas viendo esta serie."))
@@ -1454,34 +1517,27 @@ class QueVeoHoyApp:
                     recommendation.empezar_serie(uc.id)
                     self.root.after(0, lambda: self.show_toast(f"¡Empezaste '{c_db.titulo}'! (T1 C1)"))
                 self.root.after(0, self.refrescar_todo)
-                self.root.after(0, lambda: self.on_buscar_select(None))
+                self.root.after(0, lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
         threading.Thread(target=_process, daemon=True).start()
 
-    def on_buscar_ya_viendo(self):
-        selected = self.tree_buscar.selection()
-        if not selected: return
-        idx = int(self.tree_buscar.item(selected[0])['values'][0])
+    def on_buscar_ya_viendo(self, idx=None):
+        if idx is None: return
         c = self.resultados_busqueda[idx]
         
-        # Debemos asegurar el contenido antes de abrir el modal, porque requiere DB ID
         c_db = self._asegurar_contenido_bd(idx)
         uc = recommendation.agregar_a_biblioteca(c_db.id)
         
         def _on_success(p):
             self.show_toast(f"Progreso importado: T{p.temporada_actual} C{p.episodio_actual}")
             self.refrescar_todo()
-            self.on_buscar_select(None)
+            self._mostrar_resultados_busqueda(self.resultados_busqueda)
             
         ModalProgresoSerie(self.root, c_db, uc.id, _on_success)
         
-    def on_buscar_ya_termine(self):
-        selected = self.tree_buscar.selection()
-        if not selected: return
-        idx = int(self.tree_buscar.item(selected[0])['values'][0])
-        
-        self.btn_buscar_ya_termine.configure(text="Procesando...", state="disabled")
+    def on_buscar_ya_termine(self, idx=None):
+        if idx is None: return
         
         def _process():
             try:
@@ -1492,9 +1548,8 @@ class QueVeoHoyApp:
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
             finally:
-                self.root.after(0, lambda: self.btn_buscar_ya_termine.configure(text="Ya la terminé", state="normal"))
                 self.root.after(0, self.refrescar_todo)
-                self.root.after(0, lambda: self.on_buscar_select(None))
+                self.root.after(0, lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
                 
         threading.Thread(target=_process, daemon=True).start()
 
