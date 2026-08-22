@@ -201,21 +201,37 @@ class QueVeoHoyApp:
         self.title_lbl = ctk.CTkLabel(self.header_frame, text="QuéVeoHoy", font=("Helvetica", 24, "bold"), text_color=COLOR_PRIMARY)
         self.title_lbl.pack(expand=True, pady=10)
         
-        # Main Tabview
-        self.tabview = ctk.CTkTabview(self.root, fg_color=COLOR_BG_CARD, segmented_button_fg_color=COLOR_BG,
-                                      segmented_button_selected_color=COLOR_PRIMARY,
-                                      segmented_button_selected_hover_color=COLOR_HOVER,
-                                      segmented_button_unselected_hover_color=COLOR_DARK,
-                                      corner_radius=16)
-        self.tabview.pack(expand=True, fill='both', padx=20, pady=20)
+        # Custom Navigation Bar
+        self.nav_frame = ctk.CTkFrame(self.root, fg_color="transparent")
+        self.nav_frame.pack(fill='x', padx=20, pady=(10, 0))
         
-        self.tab_hoy = self.tabview.add("Hoy")
-        self.tab_en_progreso = self.tabview.add("En progreso")
-        self.tab_pendientes = self.tabview.add("Biblioteca")
-        self.tab_historial = self.tabview.add("Historial")
-        self.tab_buscar = self.tabview.add("Buscar")
+        self.nav_capsule = ctk.CTkFrame(self.nav_frame, fg_color="#1E1B2E", corner_radius=20, border_width=1, border_color="#262335")
+        self.nav_capsule.pack(anchor="center")
         
-        self.tabview.configure(command=self.on_tab_changed)
+        self.content_frame = ctk.CTkFrame(self.root, fg_color="transparent")
+        self.content_frame.pack(expand=True, fill='both', padx=20, pady=10)
+        
+        self.tabs = {}
+        self.nav_buttons = {}
+        self.current_tab = None
+        
+        tab_names = ["Hoy", "En progreso", "Biblioteca", "Historial", "Buscar"]
+        for t_name in tab_names:
+            btn = ctk.CTkButton(self.nav_capsule, text=t_name, font=("Segoe UI", 14, "bold"),
+                                corner_radius=16, fg_color="transparent", text_color="#94A3B8", hover_color="#1F1B2E",
+                                border_width=0, command=lambda name=t_name: self.set_tab(name))
+            btn.pack(side='left', padx=4, pady=4)
+            self.nav_buttons[t_name] = btn
+            
+            frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+            self.tabs[t_name] = frame
+            
+        self.tab_hoy = self.tabs["Hoy"]
+        self.tab_en_progreso = self.tabs["En progreso"]
+        self.tab_pendientes = self.tabs["Biblioteca"]
+        self.tab_historial = self.tabs["Historial"]
+        self.tab_buscar = self.tabs["Buscar"]
+        
         
         self.poster_cache = {}
         self.recomendacion_actual = None
@@ -227,6 +243,8 @@ class QueVeoHoyApp:
         self.setup_tab_pendientes()
         self.setup_tab_historial()
         self.setup_tab_buscar()
+        
+        self.set_tab("Hoy")
         
         self.apply_treeview_style()
         
@@ -294,6 +312,20 @@ class QueVeoHoyApp:
         style.map("Treeview", background=[("selected", COLOR_PRIMARY)])
         style.map("Treeview.Heading", background=[("active", COLOR_DARK)])
 
+    def set_tab(self, tab_name):
+        if self.current_tab == tab_name:
+            return
+            
+        if self.current_tab:
+            self.tabs[self.current_tab].pack_forget()
+            self.nav_buttons[self.current_tab].configure(fg_color="transparent", border_width=0, text_color="#94A3B8")
+            
+        self.current_tab = tab_name
+        self.tabs[tab_name].pack(expand=True, fill='both')
+        self.nav_buttons[tab_name].configure(fg_color="#3B185F", border_width=1, border_color="#7C3AED", text_color="#FFFFFF")
+        
+        self.on_tab_changed()
+
     def on_tab_changed(self):
         self.refrescar_todo()
 
@@ -310,41 +342,43 @@ class QueVeoHoyApp:
         self.card_frame.pack(expand=True, fill='both', padx=40, pady=(0, 5))
         
         # Botones anclados abajo (se empaquetan primero para garantizar su visibilidad en el fondo)
-        btn_frame = ctk.CTkFrame(self.card_frame, fg_color="transparent")
-        btn_frame.pack(side='bottom', pady=(5, 15))
+        btn_frame_sec = ctk.CTkFrame(self.card_frame, fg_color="transparent")
+        btn_frame_sec.pack(side='bottom', pady=(5, 15))
         
-        self.btn_visto = ctk.CTkButton(btn_frame, text="✔ Ya la vi", command=self.on_marcar_visto, 
-                                       corner_radius=18, fg_color="#064E3B", hover_color="#042F2E", 
-                                       text_color="#10B981", border_color="#059669", border_width=2, font=("Segoe UI", 12, "bold"))
+        btn_frame_main = ctk.CTkFrame(self.card_frame, fg_color="transparent")
+        btn_frame_main.pack(side='bottom', pady=(0, 5))
         
-        self.btn_para_despues = ctk.CTkButton(btn_frame, text="🕒 Dejar para después", command=self.on_para_despues, 
-                                              corner_radius=18, fg_color="#78350F", hover_color="#451A03", 
+        self.btn_visto = ctk.CTkButton(btn_frame_main, text="✔ Ya la vi", command=self.on_marcar_visto, 
+                                       width=280, corner_radius=16, fg_color="#059669", hover_color="#10B981", 
+                                       text_color="#FFFFFF", border_width=0, font=("Segoe UI", 13, "bold"))
+        self.btn_visto.pack(side='top')
+        
+        self.btn_para_despues = ctk.CTkButton(btn_frame_sec, text="🕒 Dejar para después", command=self.on_para_despues, 
+                                              corner_radius=14, fg_color="#78350F", hover_color="#451A03", 
                                               text_color="#F59E0B", border_color="#D97706", border_width=2, font=("Segoe UI", 12, "bold"))
                                               
-        self.btn_siguiente = ctk.CTkButton(btn_frame, text="⏩ Siguiente", command=self.on_siguiente, 
-                                           corner_radius=18, fg_color="#3B0764", hover_color="#2E054E", 
-                                           text_color="#C084FC", border_color="#A855F7", border_width=2, font=("Segoe UI", 12, "bold"))
+        self.btn_siguiente = ctk.CTkButton(btn_frame_sec, text="⏭ Siguiente", command=self.on_siguiente, 
+                                           corner_radius=14, fg_color="#4C1D95", hover_color="#3B0764", 
+                                           text_color="#DDD6FE", border_color="#DDD6FE", border_width=2, font=("Segoe UI", 12, "bold"))
         
-        self.btn_visto.pack(side='left', padx=5)
+        self.btn_pausar = ctk.CTkButton(btn_frame_sec, text="⏸ Pausar", command=self.on_pausar, 
+                                        corner_radius=14, fg_color="#78350F", hover_color="#451A03", 
+                                        text_color="#F59E0B", border_color="#F59E0B", border_width=2, font=("Segoe UI", 12, "bold"))
+                                        
+        self.btn_abandonar = ctk.CTkButton(btn_frame_sec, text="✕ Abandonar", command=self.on_abandonar, 
+                                           corner_radius=14, fg_color="#7F1D1D", hover_color="#450A0A", 
+                                           text_color="#FCA5A5", border_color="#FCA5A5", border_width=2, font=("Segoe UI", 12, "bold"))
+                                           
+        self.btn_ya_viendo = ctk.CTkButton(btn_frame_sec, text="▶ Ya la estoy viendo", command=self.on_ya_viendo, 
+                                           corner_radius=14, fg_color="#164E63", hover_color="#083344", 
+                                           text_color="#06B6D4", border_color="#0891B2", border_width=2, font=("Segoe UI", 12, "bold"))
+                                           
+        self.btn_ya_termine = ctk.CTkButton(btn_frame_sec, text="✔ Ya la terminé", command=self.on_ya_termine, 
+                                            corner_radius=14, fg_color="#064E3B", hover_color="#042F2E", 
+                                            text_color="#10B981", border_color="#059669", border_width=2, font=("Segoe UI", 12, "bold"))
+        
         self.btn_para_despues.pack(side='left', padx=5)
         self.btn_siguiente.pack(side='left', padx=5)
-        
-        # Fila extra de botones
-        btn_frame_extra = ctk.CTkFrame(self.card_frame, fg_color="transparent", height=0)
-        btn_frame_extra.pack(side='bottom', pady=(0, 5))
-        
-        self.btn_pausar = ctk.CTkButton(btn_frame_extra, text="⏸ Pausar", command=self.on_pausar, 
-                                        corner_radius=18, fg_color="#1E1B4B", hover_color="#17153B", 
-                                        text_color="#818CF8", border_color="#6366F1", border_width=2, font=("Segoe UI", 12, "bold"))
-        self.btn_abandonar = ctk.CTkButton(btn_frame_extra, text="✕ Abandonar", command=self.on_abandonar, 
-                                           corner_radius=18, fg_color="#7F1D1D", hover_color="#450A0A", 
-                                           text_color="#EF4444", border_color="#DC2626", border_width=2, font=("Segoe UI", 12, "bold"))
-        self.btn_ya_viendo = ctk.CTkButton(btn_frame_extra, text="▶ Ya la estoy viendo", command=self.on_ya_viendo, 
-                                           corner_radius=18, fg_color="#164E63", hover_color="#083344", 
-                                           text_color="#06B6D4", border_color="#0891B2", border_width=2, font=("Segoe UI", 12, "bold"))
-        self.btn_ya_termine = ctk.CTkButton(btn_frame_extra, text="✔ Ya la terminé", command=self.on_ya_termine, 
-                                            corner_radius=18, fg_color="#064E3B", hover_color="#042F2E", 
-                                            text_color="#10B981", border_color="#059669", border_width=2, font=("Segoe UI", 12, "bold"))
 
         # Póster Frame (Aura / Profundidad)
         self.shadow_frame = ctk.CTkFrame(self.card_frame, fg_color="transparent", 
@@ -360,18 +394,18 @@ class QueVeoHoyApp:
         self.lbl_titulo.pack(side='top', padx=25, pady=(2, 2))
         
         self.detalle_frame = ctk.CTkFrame(self.card_frame, fg_color="transparent")
-        self.detalle_frame.pack(side='top', pady=(0, 6))
+        self.detalle_frame.pack(side='top', pady=(0, 8))
         
-        self.lbl_badge_tipo = ctk.CTkLabel(self.detalle_frame, text="", fg_color="#3B0764", text_color="#C084FC", corner_radius=8, font=("Segoe UI", 13, "bold"))
-        self.lbl_badge_tipo.pack(side="left", padx=(0, 8))
+        self.lbl_badge_tipo = ctk.CTkLabel(self.detalle_frame, text="", fg_color="#3B0764", text_color="#C084FC", corner_radius=8, font=("Segoe UI", 10, "bold"))
+        self.lbl_badge_tipo.pack(side="left", padx=(0, 8), ipadx=6, ipady=1)
         
-        self.lbl_anio = ctk.CTkLabel(self.detalle_frame, text="", text_color="#94A3B8", font=("Segoe UI", 13))
+        self.lbl_anio = ctk.CTkLabel(self.detalle_frame, text="", text_color="#F1F5F9", font=("Segoe UI", 14, "bold"))
         self.lbl_anio.pack(side="left")
         
         # Sinopsis (Cambiado a CTkTextbox para evitar recortes y permitir flujo nativo)
-        self.lbl_sinopsis = ctk.CTkTextbox(self.card_frame, font=("Helvetica", 14), text_color="#E0E0E5", 
+        self.lbl_sinopsis = ctk.CTkTextbox(self.card_frame, font=("Segoe UI", 15, "normal"), text_color="#CBD5E1", 
                                            fg_color="transparent", border_width=0, wrap="word", activate_scrollbars=False, height=240)
-        self.lbl_sinopsis.pack(side='top', padx=30, pady=(5, 15), fill='both', expand=True)
+        self.lbl_sinopsis.pack(side='top', padx=30, pady=(12, 16), fill='both', expand=True)
 
     def _set_sinopsis(self, texto):
         self.lbl_sinopsis.configure(state="normal")
@@ -562,7 +596,7 @@ class QueVeoHoyApp:
             if uc and uc.estado == ESTADO_EN_PROGRESO:
                 self.btn_visto.configure(text="✔ Capítulo Visto")
                 self.btn_para_despues.pack_forget()
-                self.btn_pausar.pack(side='left', padx=5)
+                self.btn_pausar.pack(side='left', padx=5, before=self.btn_siguiente)
                 self.btn_abandonar.pack(side='left', padx=5)
             else:
                 self.btn_visto.configure(text="▶ Empezar Serie")
@@ -749,14 +783,14 @@ class QueVeoHoyApp:
         header_frame.grid_columnconfigure(1, minsize=110, weight=0)
         header_frame.grid_columnconfigure(2, minsize=140, weight=1)
         
-        lbl_h_titulo = ctk.CTkLabel(header_frame, text="SERIE / TÍTULO", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_titulo = ctk.CTkLabel(header_frame, text="SERIE / TÍTULO", font=("Segoe UI", 12, "bold"), text_color="#64748B")
         lbl_h_titulo.grid(row=0, column=0, sticky="w", padx=(20, 10), pady=8)
         
-        lbl_h_avance = ctk.CTkLabel(header_frame, text="AVANCE", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_avance.grid(row=0, column=1, sticky="w", pady=8)
+        lbl_h_avance = ctk.CTkLabel(header_frame, text="AVANCE", font=("Segoe UI", 12, "bold"), text_color="#64748B", anchor="center")
+        lbl_h_avance.grid(row=0, column=1, sticky="nsew", pady=8)
         
-        lbl_h_estado = ctk.CTkLabel(header_frame, text="ESTADO", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_estado.grid(row=0, column=2, sticky="w", pady=8)
+        lbl_h_estado = ctk.CTkLabel(header_frame, text="ESTADO", font=("Segoe UI", 12, "bold"), text_color="#64748B", anchor="center")
+        lbl_h_estado.grid(row=0, column=2, sticky="nsew", pady=8)
         
         # Scrollable Area
         self.scroll_progreso = ctk.CTkScrollableFrame(self.prog_list_container, fg_color="transparent",
@@ -831,7 +865,7 @@ class QueVeoHoyApp:
             text_container = ctk.CTkFrame(tit_frame, fg_color="transparent", cursor="hand2")
             text_container.pack(side="left", anchor="center")
             
-            lbl_tit = ctk.CTkLabel(text_container, text=item.titulo, font=("Segoe UI", 14, "bold"), text_color=COLOR_TEXT, anchor="w", cursor="hand2")
+            lbl_tit = ctk.CTkLabel(text_container, text=item.titulo, font=("Segoe UI", 15, "bold"), text_color="#F8FAFC", anchor="w", cursor="hand2")
             lbl_tit.pack(anchor="w")
             
             if item.es_anime:
@@ -841,11 +875,11 @@ class QueVeoHoyApp:
             
             # --- COLUMNA 1: AVANCE ---
             avance_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
-            avance_frame.grid(row=0, column=1, sticky="w", pady=10)
+            avance_frame.grid(row=0, column=1, sticky="nsew", pady=10)
             
             # Formatear el texto de avance en cyan claro y ubicarlo alineado
-            lbl_avance = ctk.CTkLabel(avance_frame, text=avance, font=("Segoe UI", 12, "bold"), text_color="#06B6D4", anchor="w", cursor="hand2")
-            lbl_avance.pack(side="top", anchor="w")
+            lbl_avance = ctk.CTkLabel(avance_frame, text=avance, font=("Segoe UI", 14, "bold"), text_color="#38BDF8", anchor="center", cursor="hand2")
+            lbl_avance.pack(side="top", anchor="center")
             
             porcentaje = 0.0
             meta = repository.obtener_tv_metadata(item.contenido_id)
@@ -860,15 +894,15 @@ class QueVeoHoyApp:
                     pass
             
             prog_bar = ctk.CTkProgressBar(avance_frame, width=90, height=6, corner_radius=3, progress_color="#06B6D4", fg_color="#374151")
-            prog_bar.pack(side="top", pady=(4, 0), anchor="w")
+            prog_bar.pack(side="top", pady=(4, 0), anchor="center")
             prog_bar.set(porcentaje)
             
             # --- COLUMNA 2: ESTADO ---
             badge_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
-            badge_frame.grid(row=0, column=2, sticky="w", pady=10)
+            badge_frame.grid(row=0, column=2, sticky="nsew", pady=10)
             
             badge = ui_styles.crear_badge_estado(badge_frame, estado_legible)
-            badge.pack(anchor="w")
+            badge.pack(anchor="center", pady=12)
             
             # Separador sutil
             if idx < len(items) - 1:
@@ -909,7 +943,7 @@ class QueVeoHoyApp:
                 if c:
                     self.recomendacion_actual = c
                     self._next_rec_cache = None
-                    self.tabview.set("Hoy")
+                    self.set_tab("Hoy")
             
             self.refrescar_todo()
         except recommendation.LimiteSeriesEnProgresoAlcanzado as e:
@@ -970,37 +1004,29 @@ class QueVeoHoyApp:
 
     # --- PESTAÑA PARA DESPUÉS ---
     def setup_tab_pendientes(self):
-        # Fila Superior (Panel de Métricas):
-        stats_frame = ctk.CTkFrame(self.tab_pendientes, fg_color="#1A1A22", corner_radius=10)
-        stats_frame.pack(fill='x', padx=10, pady=(5, 5))
-        
-        lbl_stats_title = ctk.CTkLabel(stats_frame, text="📊 Contenido visto:", text_color="#E0E0E5", font=("Helvetica", 14, "bold"))
-        lbl_stats_title.pack(pady=(10, 0))
-        
-        self.lbl_stats = ctk.CTkLabel(stats_frame, text="🏆 Total: 0 | 🎬 Pelis: 0 | 📺 Series: 0 | ⛩️ Anime Series: 0 | ⛩️ Anime Pelis: 0", text_color="#A78BFA", font=("Helvetica", 13, "bold"))
-        self.lbl_stats.pack(pady=(5, 10))
-
-        # Fila Inferior (Filtros y Buscador):
+        # Fila Superior (Controles de Biblioteca):
         controls_frame = ctk.CTkFrame(self.tab_pendientes, fg_color="transparent")
-        controls_frame.pack(fill='x', padx=10, pady=5)
+        controls_frame.pack(fill='x', padx=10, pady=(10, 5))
         
-        self.filtro_tipo_pendientes = ctk.CTkOptionMenu(controls_frame, values=["Tipo", "Películas", "Series", "Anime (Todos)", "Anime (Series)", "Anime (Películas)"], command=lambda _: self.refresh_pendientes(),
-                                                   fg_color="#6D28D9", button_color="#5B21B6", button_hover_color="#7C3AED",
-                                                   dropdown_fg_color="#1E1E24", dropdown_hover_color="#6D28D9",
-                                                   dropdown_text_color="#FFFFFF", text_color="#FFFFFF")
-        self.filtro_tipo_pendientes.set("Tipo")
+        self.filtro_tipo_pendientes = ctk.CTkSegmentedButton(controls_frame, values=["Todas (0)", "Películas (0)", "Series (0)", "Anime (0)"],
+                                                             command=lambda _: self.refresh_pendientes(),
+                                                             corner_radius=14, fg_color="#1E1B2E", height=32, font=("Segoe UI", 12, "bold"),
+                                                             selected_color="#6B21A8", selected_hover_color="#581C87",
+                                                             unselected_color="#1E1B2E", unselected_hover_color="#2A2640",
+                                                             text_color="#C084FC")
+        self.filtro_tipo_pendientes.set("Todas (0)")
         self.filtro_tipo_pendientes.pack(side='left', padx=5)
 
-        self.filtro_estado_pendientes = ctk.CTkOptionMenu(controls_frame, values=["Estado", "Para después", "Terminados / Vistos", "Abandonadas"], command=lambda _: self.refresh_pendientes(),
-                                                   fg_color="#6D28D9", button_color="#5B21B6", button_hover_color="#7C3AED",
-                                                   dropdown_fg_color="#1E1E24", dropdown_hover_color="#6D28D9",
-                                                   dropdown_text_color="#FFFFFF", text_color="#FFFFFF")
-        self.filtro_estado_pendientes.set("Estado")
-        self.filtro_estado_pendientes.pack(side='left', padx=5)
-        
-        self.entry_buscar_pendientes = ctk.CTkEntry(controls_frame, placeholder_text="Buscar en biblioteca...")
-        self.entry_buscar_pendientes.pack(side='right', fill='x', expand=True, padx=5)
+        self.entry_buscar_pendientes = ctk.CTkEntry(controls_frame, placeholder_text="Buscar en biblioteca...", corner_radius=14, height=32)
+        self.entry_buscar_pendientes.pack(side='left', fill='x', expand=True, padx=5)
         self.entry_buscar_pendientes.bind("<KeyRelease>", lambda event: self.refresh_pendientes())
+        
+        self.filtro_estado_pendientes = ctk.CTkOptionMenu(controls_frame, values=["Todos", "Terminadas / Vistos", "Para después", "Abandonadas"], command=lambda _: self.refresh_pendientes(),
+                                                   corner_radius=14, height=32, fg_color="#1E1B2E", button_color="#1E1B2E", button_hover_color="#2A2640",
+                                                   dropdown_fg_color="#1E1B2E", dropdown_hover_color="#2A2640",
+                                                   dropdown_text_color="#C084FC", text_color="#C084FC")
+        self.filtro_estado_pendientes.set("Todos")
+        self.filtro_estado_pendientes.pack(side='right', padx=5)
         
         # --- NUEVA LISTA CUSTOM CON SCROLL ---
         self.pend_list_container = ctk.CTkFrame(self.tab_pendientes, fg_color=COLOR_BG_CARD)
@@ -1010,18 +1036,18 @@ class QueVeoHoyApp:
         header_frame = ctk.CTkFrame(self.pend_list_container, fg_color=COLOR_BG, corner_radius=8)
         header_frame.pack(fill='x', padx=5, pady=5)
         
-        header_frame.grid_columnconfigure(0, weight=1)
-        header_frame.grid_columnconfigure(1, minsize=100)
-        header_frame.grid_columnconfigure(2, minsize=120)
+        header_frame.grid_columnconfigure(0, minsize=320, weight=0)
+        header_frame.grid_columnconfigure(1, minsize=140, weight=0)
+        header_frame.grid_columnconfigure(2, minsize=160, weight=1)
         
-        lbl_h_titulo = ctk.CTkLabel(header_frame, text="TÍTULO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_titulo = ctk.CTkLabel(header_frame, text="TÍTULO", font=("Segoe UI", 12, "bold"), text_color="#64748B")
         lbl_h_titulo.grid(row=0, column=0, sticky="w", padx=15, pady=5)
         
-        lbl_h_tipo = ctk.CTkLabel(header_frame, text="TIPO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_tipo.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        lbl_h_tipo = ctk.CTkLabel(header_frame, text="TIPO", font=("Segoe UI", 12, "bold"), text_color="#64748B", anchor="center")
+        lbl_h_tipo.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
         
-        lbl_h_estado = ctk.CTkLabel(header_frame, text="ESTADO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_estado.grid(row=0, column=2, padx=5, pady=5)
+        lbl_h_estado = ctk.CTkLabel(header_frame, text="ESTADO", font=("Segoe UI", 12, "bold"), text_color="#64748B", anchor="center")
+        lbl_h_estado.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
         
         # Scrollable Area
         self.scroll_pendientes = ctk.CTkScrollableFrame(self.pend_list_container, fg_color="transparent")
@@ -1036,12 +1062,12 @@ class QueVeoHoyApp:
         btn_frame = ctk.CTkFrame(self.tab_pendientes, fg_color="transparent")
         btn_frame.pack(pady=10)
         
-        btn_reanudar = ctk.CTkButton(btn_frame, text="Reanudar Seleccionado", command=self.on_reanudar,
-                                     corner_radius=30, fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER)
-        btn_eliminar_sel = ctk.CTkButton(btn_frame, text="Eliminar Seleccionados", command=self.on_eliminar_seleccionados,
-                                         corner_radius=30, fg_color="transparent", border_width=1, border_color="#555")
-        btn_eliminar_todos = ctk.CTkButton(btn_frame, text="Eliminar Todos", command=self.on_eliminar_todos,
-                                           corner_radius=30, fg_color="transparent", border_width=1, border_color="#e04f4f", text_color="#e04f4f")
+        btn_reanudar = ctk.CTkButton(btn_frame, text="▶ Reanudar Seleccionado", command=self.on_reanudar,
+                                     corner_radius=16, fg_color="#164E63", hover_color="#083344", text_color="#06B6D4", border_color="#06B6D4", border_width=2, font=("Segoe UI", 12, "bold"))
+        btn_eliminar_sel = ctk.CTkButton(btn_frame, text="✕ Eliminar Seleccionado", command=self.on_eliminar_seleccionados,
+                                         corner_radius=16, fg_color="#7F1D1D", hover_color="#450A0A", text_color="#EF4444", border_color="#EF4444", border_width=2, font=("Segoe UI", 12, "bold"))
+        btn_eliminar_todos = ctk.CTkButton(btn_frame, text="🗑 Eliminar Todos", command=self.on_eliminar_todos,
+                                           corner_radius=16, fg_color="transparent", hover_color="#450A0A", border_width=2, border_color="#7F1D1D", text_color="#EF4444", font=("Segoe UI", 12, "bold"))
                                            
         btn_reanudar.pack(side='left', padx=5)
         btn_eliminar_sel.pack(side='left', padx=5)
@@ -1068,46 +1094,54 @@ class QueVeoHoyApp:
         self.selected_pend_c_id = None
         self.selected_pend_tipo = None
             
-        try:
-            m = repository.obtener_metricas_biblioteca()
-            
-            items = recommendation.obtener_biblioteca_inactiva()
-            
-            # Fallback en memoria si la BD da 0
-            if m['total'] == 0 and len(items) > 0:
-                pelis_mem = series_mem = anime_series_mem = anime_pelis_mem = 0
-                for item in items:
-                    c = item.contenido
-                    e = item.usuario_contenido
-                    if e.estado.lower() in ('terminada', 'terminado', 'vista', 'visto'):
-                        is_anime = c.es_anime or c.mal_id is not None
-                        if is_anime and c.tipo.upper() == 'TV':
-                            anime_series_mem += 1
-                        elif is_anime and c.tipo.upper() == 'MOVIE':
-                            anime_pelis_mem += 1
-                        elif c.tipo.upper() == 'MOVIE':
-                            pelis_mem += 1
-                        elif c.tipo.upper() == 'TV':
-                            series_mem += 1
-                
-                if (pelis_mem + series_mem + anime_series_mem + anime_pelis_mem) > 0:
-                    m = {
-                        "pelis": pelis_mem,
-                        "series": series_mem,
-                        "anime_series": anime_series_mem,
-                        "anime_pelis": anime_pelis_mem,
-                        "total": pelis_mem + series_mem + anime_series_mem + anime_pelis_mem
-                    }
-
-            print(f"[DEBUG STATS] Métricas calculadas: {m}")
-            texto = f"🏆 Total: {m['total']} | 🎬 Pelis: {m['pelis']} | 📺 Series: {m['series']} | ⛩️ Anime Series: {m.get('anime_series', 0)} | ⛩️ Anime Pelis: {m.get('anime_pelis', 0)}"
-            self.lbl_stats.configure(text=texto)
-        except Exception as e:
-            print(f"[ERROR STATS] Error calculando métricas: {e}")
-            items = recommendation.obtener_biblioteca_inactiva()
+        items = recommendation.obtener_biblioteca_inactiva()
         
-        filtro_tipo = getattr(self, "filtro_tipo_pendientes", None)
-        filtro_tipo_val = filtro_tipo.get() if filtro_tipo else "Tipo"
+        # Calcular contadores (solo contenido terminado/visto)
+        total_mem = 0
+        pelis_mem = series_mem = anime_mem = 0
+        for item in items:
+            c = item.contenido
+            e = item.usuario_contenido
+            is_terminado = str(e.estado).lower() in ("terminada", "terminado", "vista", "visto", "ya la vi")
+            
+            if is_terminado:
+                total_mem += 1
+                is_anime = getattr(c, 'es_anime', False) or getattr(c, 'tipo', '') == 'ANIME' or getattr(c, 'mal_id', None) is not None
+                if is_anime:
+                    anime_mem += 1
+                elif c.tipo.upper() == 'MOVIE':
+                    pelis_mem += 1
+                elif c.tipo.upper() == 'TV':
+                    series_mem += 1
+                
+        # Actualizar Segmented Button
+        if hasattr(self, "filtro_tipo_pendientes"):
+            current_raw = self.filtro_tipo_pendientes.get()
+            self.filtro_tipo_pendientes.configure(values=[f"Todas ({total_mem})", f"Películas ({pelis_mem})", f"Series ({series_mem})", f"Anime ({anime_mem})"])
+            
+            if "Películas" in current_raw:
+                self.filtro_tipo_pendientes.set(f"Películas ({pelis_mem})")
+            elif "Series" in current_raw:
+                self.filtro_tipo_pendientes.set(f"Series ({series_mem})")
+            elif "Anime" in current_raw:
+                self.filtro_tipo_pendientes.set(f"Anime ({anime_mem})")
+            else:
+                self.filtro_tipo_pendientes.set(f"Todas ({total_mem})")
+                
+            current_new = self.filtro_tipo_pendientes.get()
+            for val, btn in self.filtro_tipo_pendientes._buttons_dict.items():
+                if val == current_new:
+                    btn.configure(text_color="#FFFFFF")
+                else:
+                    btn.configure(text_color="#C084FC")
+        
+        filtro_tipo_raw = getattr(self, "filtro_tipo_pendientes", None)
+        filtro_tipo_val_raw = filtro_tipo_raw.get() if filtro_tipo_raw else "Todas"
+        
+        if "Películas" in filtro_tipo_val_raw: filtro_tipo_val = "Películas"
+        elif "Series" in filtro_tipo_val_raw: filtro_tipo_val = "Series"
+        elif "Anime" in filtro_tipo_val_raw: filtro_tipo_val = "Anime (Todos)"
+        else: filtro_tipo_val = "Todos"
         
         filtro_estado = getattr(self, "filtro_estado_pendientes", None)
         filtro_estado_val = filtro_estado.get() if filtro_estado else "Estado"
@@ -1127,17 +1161,17 @@ class QueVeoHoyApp:
                 continue
                 
             # 2. Aplicar filtro de estado
-            is_terminado = e.estado in (ESTADO_TERMINADA, ESTADO_VISTA)
-            is_para_despues = e.estado == ESTADO_PARA_DESPUES
-            is_abandonada = e.estado == ESTADO_ABANDONADA
+            is_terminado = str(e.estado).lower() in ("terminada", "terminado", "vista", "visto", "ya la vi")
+            is_para_despues = str(e.estado).lower() in ("para después", "para despues", "pendiente")
+            is_abandonada = str(e.estado).lower() in ("abandonada", "cancelada")
             
             if filtro_estado_val == "Para después" and not is_para_despues:
                 continue
-            elif filtro_estado_val == "Terminados / Vistos" and not is_terminado:
+            elif filtro_estado_val == "Terminadas / Vistos" and not is_terminado:
                 continue
             elif filtro_estado_val == "Abandonadas" and not is_abandonada:
                 continue
-            elif filtro_estado_val in ("Todos", "Estado"):
+            elif filtro_estado_val == "Todos":
                 pass # Incluye todo
                 
             tipo_legible = self._get_tipo_legible(c)
@@ -1147,14 +1181,16 @@ class QueVeoHoyApp:
             row_frame = ctk.CTkFrame(self.scroll_pendientes, fg_color="transparent", corner_radius=8, cursor="hand2")
             row_frame.pack(fill='x', padx=5, pady=2)
             
-            row_frame.grid_columnconfigure(0, weight=1)
-            row_frame.grid_columnconfigure(1, minsize=100)
-            row_frame.grid_columnconfigure(2, minsize=120)
+            row_frame.grid_columnconfigure(0, minsize=320, weight=0)
+            row_frame.grid_columnconfigure(1, minsize=140, weight=0)
+            row_frame.grid_columnconfigure(2, minsize=160, weight=1)
             
-            lbl_tit = ctk.CTkLabel(row_frame, text=c.titulo, font=("Helvetica", 12), text_color=COLOR_TEXT, anchor="w", cursor="hand2")
+            titulo_trunc = c.titulo[:33] + "..." if len(c.titulo) > 35 else c.titulo
+            
+            lbl_tit = ctk.CTkLabel(row_frame, text=titulo_trunc, font=("Segoe UI", 13, "normal"), text_color="#F1F5F9", anchor="w", cursor="hand2")
             lbl_tit.grid(row=0, column=0, sticky="w", padx=15, pady=8)
             
-            lbl_tipo = ctk.CTkLabel(row_frame, text=tipo_legible, font=("Helvetica", 12), text_color=COLOR_TEXT_SEC, anchor="w", cursor="hand2")
+            lbl_tipo = ctk.CTkLabel(row_frame, text=tipo_legible, font=("Segoe UI", 13, "normal"), text_color="#94A3B8", anchor="w", cursor="hand2")
             lbl_tipo.grid(row=0, column=1, sticky="w", padx=5, pady=8)
             
             badge_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
@@ -1194,7 +1230,7 @@ class QueVeoHoyApp:
                 self.recomendacion_actual = c
                 self._next_rec_cache = None
                 self.refrescar_todo()
-                self.tabview.set("Hoy")
+                self.set_tab("Hoy")
                 
             except recommendation.LimiteSeriesEnProgresoAlcanzado:
                 messagebox.showerror("Límite Alcanzado", "No podés tener más de 4 series en progreso.")
@@ -1205,7 +1241,7 @@ class QueVeoHoyApp:
             self.recomendacion_actual = c
             self._next_rec_cache = None
             self.refrescar_todo()
-            self.tabview.set("Hoy")
+            self.set_tab("Hoy")
 
     def on_eliminar_seleccionados(self):
         if not self.selected_pend_uc_id:
@@ -1241,9 +1277,9 @@ class QueVeoHoyApp:
         lbl_filtro.pack(side='left', padx=(0, 5))
         
         self.filtro_historial = ctk.CTkOptionMenu(top_frame, values=["Todos", "Películas", "Series", "Anime (Todos)", "Anime (Series)", "Anime (Películas)"], command=lambda _: self.refresh_historial(),
-                                                  fg_color="#6D28D9", button_color="#5B21B6", button_hover_color="#7C3AED",
-                                                  dropdown_fg_color="#1E1E24", dropdown_hover_color="#6D28D9",
-                                                  dropdown_text_color="#FFFFFF", text_color="#FFFFFF")
+                                                  corner_radius=14, fg_color="#1E1B2E", button_color="#1E1B2E", button_hover_color="#2A2640",
+                                                  dropdown_fg_color="#1E1B2E", dropdown_hover_color="#2A2640",
+                                                  dropdown_text_color="#C084FC", text_color="#C084FC")
         self.filtro_historial.set("Todos")
         self.filtro_historial.pack(side='left', padx=5)
         
@@ -1264,17 +1300,17 @@ class QueVeoHoyApp:
         header_frame.grid_columnconfigure(2, minsize=120) # Tipo
         header_frame.grid_columnconfigure(3, minsize=140) # Evento
         
-        lbl_h_fecha = ctk.CTkLabel(header_frame, text="FECHA", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_fecha = ctk.CTkLabel(header_frame, text="FECHA", font=("Segoe UI", 12, "bold"), text_color="#64748B")
         lbl_h_fecha.grid(row=0, column=0, sticky="w", padx=15, pady=5)
         
-        lbl_h_titulo = ctk.CTkLabel(header_frame, text="TÍTULO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_titulo = ctk.CTkLabel(header_frame, text="TÍTULO", font=("Segoe UI", 12, "bold"), text_color="#64748B")
         lbl_h_titulo.grid(row=0, column=1, sticky="w", padx=5, pady=5)
         
-        lbl_h_tipo = ctk.CTkLabel(header_frame, text="TIPO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_tipo = ctk.CTkLabel(header_frame, text="TIPO", font=("Segoe UI", 12, "bold"), text_color="#64748B")
         lbl_h_tipo.grid(row=0, column=2, sticky="w", padx=5, pady=5)
         
-        lbl_h_evento = ctk.CTkLabel(header_frame, text="EVENTO", font=("Helvetica", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_evento.grid(row=0, column=3, padx=5, pady=5)
+        lbl_h_evento = ctk.CTkLabel(header_frame, text="EVENTO", font=("Segoe UI", 12, "bold"), text_color="#64748B")
+        lbl_h_evento.grid(row=0, column=3, sticky="w", padx=5, pady=5)
         
         # Scrollable Area
         self.scroll_historial = ctk.CTkScrollableFrame(self.hist_list_container, fg_color="transparent")
@@ -1283,23 +1319,23 @@ class QueVeoHoyApp:
         # Variables de selección
         self.selected_hist_c_id = None
         self.selected_hist_tipo = None
+        self.selected_hist_evento = None
         self.selected_hist_row_frame = None
         
         self.historial_btn_frame = ctk.CTkFrame(self.tab_historial, fg_color="transparent")
-        self.historial_btn_frame.pack(side='bottom', pady=15)
+        # El contenedor empieza oculto hasta que se seleccione una fila
         
-        self.btn_hist_accion = ctk.CTkButton(self.historial_btn_frame, text="Seleccionar...", state="disabled",
-                                      corner_radius=30, fg_color="#6D28D9", hover_color="#7C3AED",
-                                      text_color="#FFFFFF", text_color_disabled="#FFFFFF")
+        self.btn_hist_accion = ctk.CTkButton(self.historial_btn_frame, text="Seleccionar...", state="disabled")
         self.btn_hist_accion.pack(side='left', padx=5)
 
-    def select_historial_row(self, row_frame, c_id, tipo):
+    def select_historial_row(self, row_frame, c_id, tipo, evento):
         if self.selected_hist_row_frame:
             self.selected_hist_row_frame.configure(fg_color="transparent")
             
         self.selected_hist_row_frame = row_frame
         self.selected_hist_c_id = c_id
         self.selected_hist_tipo = tipo
+        self.selected_hist_evento = evento
         
         # Resaltado sutil
         row_frame.configure(fg_color="#2A2A35")
@@ -1312,6 +1348,8 @@ class QueVeoHoyApp:
         self.selected_hist_row_frame = None
         self.selected_hist_c_id = None
         self.selected_hist_tipo = None
+        self.selected_hist_evento = None
+        self.historial_btn_frame.pack_forget()
             
         items = repository.obtener_historial_recomendaciones(limit=100)
         search_term = self.entry_buscar_historial.get().lower()
@@ -1352,24 +1390,24 @@ class QueVeoHoyApp:
             row_frame.grid_columnconfigure(2, minsize=120)
             row_frame.grid_columnconfigure(3, minsize=140)
             
-            lbl_fecha = ctk.CTkLabel(row_frame, text=fecha_str, font=("Helvetica", 11), text_color=COLOR_TEXT_SEC, anchor="w", cursor="hand2")
+            lbl_fecha = ctk.CTkLabel(row_frame, text=fecha_str, font=("Segoe UI", 12, "normal"), text_color="#64748B", anchor="w", cursor="hand2")
             lbl_fecha.grid(row=0, column=0, sticky="w", padx=15, pady=8)
             
-            lbl_tit = ctk.CTkLabel(row_frame, text=titulo, font=("Helvetica", 12, "bold"), text_color=COLOR_TEXT, anchor="w", cursor="hand2")
+            lbl_tit = ctk.CTkLabel(row_frame, text=titulo, font=("Segoe UI", 13, "normal"), text_color="#F1F5F9", anchor="w", cursor="hand2")
             lbl_tit.grid(row=0, column=1, sticky="w", padx=5, pady=8)
             
-            lbl_tipo = ctk.CTkLabel(row_frame, text=tipo, font=("Helvetica", 12), text_color=COLOR_TEXT_SEC, anchor="w", cursor="hand2")
+            lbl_tipo = ctk.CTkLabel(row_frame, text=tipo, font=("Segoe UI", 13, "normal"), text_color="#94A3B8", anchor="w", cursor="hand2")
             lbl_tipo.grid(row=0, column=2, sticky="w", padx=5, pady=8)
             
             badge_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
-            badge_frame.grid(row=0, column=3, padx=5, pady=8)
+            badge_frame.grid(row=0, column=3, sticky="w", padx=5, pady=8)
             
             badge = ui_styles.crear_badge_estado(badge_frame, evento)
             badge.pack()
             
             # Evento de selección
-            def on_click(evt, r=row_frame, cid=h.contenido_id, t=tipo):
-                self.select_historial_row(r, cid, t)
+            def on_click(evt, r=row_frame, cid=h.contenido_id, t=tipo, ev=evento):
+                self.select_historial_row(r, cid, t, ev)
                 
             row_frame.bind("<Button-1>", on_click)
             lbl_fecha.bind("<Button-1>", on_click)
@@ -1382,15 +1420,21 @@ class QueVeoHoyApp:
 
     def on_historial_select(self):
         if not self.selected_hist_c_id:
-            self.btn_hist_accion.configure(text="Seleccionar...", state="disabled", command=None)
+            self.historial_btn_frame.pack_forget()
             return
             
+        self.historial_btn_frame.pack(side='bottom', pady=15)
         tipo = self.selected_hist_tipo
+        evento = self.selected_hist_evento
         
-        if "Película" in tipo:
-            self.btn_hist_accion.configure(text="Ya la vi", state="normal", command=self.on_historial_movie)
-        elif "Serie" in tipo:
-            self.btn_hist_accion.configure(text="Empezar a ver", state="normal", command=self.on_historial_serie)
+        cmd = self.on_historial_movie if "Película" in tipo else self.on_historial_serie
+        
+        if evento == "Para después" or evento == "PARA_DESPUES":
+            self.btn_hist_accion.configure(text="▶ Empezar ahora / Ver", state="normal", fg_color="#164E63", hover_color="#083344", text_color="#06B6D4", corner_radius=16, font=("Segoe UI", 13, "bold"), command=cmd)
+        elif "Película" in tipo:
+            self.btn_hist_accion.configure(text="✔ Ya la vi", state="normal", fg_color="#064E3B", hover_color="#022C22", text_color="#10B981", corner_radius=16, font=("Segoe UI", 13, "bold"), command=self.on_historial_movie)
+        else: # Series / Anime
+            self.btn_hist_accion.configure(text="▶ Empezar a ver", state="normal", fg_color="#164E63", hover_color="#083344", text_color="#06B6D4", corner_radius=16, font=("Segoe UI", 13, "bold"), command=self.on_historial_serie)
 
     def on_historial_movie(self):
         if not self.selected_hist_c_id: return
@@ -1417,12 +1461,12 @@ class QueVeoHoyApp:
         top_frame = ctk.CTkFrame(self.tab_buscar, fg_color="transparent")
         top_frame.pack(fill='x', padx=10, pady=5)
         
-        self.entry_buscar_online = ctk.CTkEntry(top_frame, placeholder_text="Buscar en TMDB / Jikan...", width=300)
+        self.entry_buscar_online = ctk.CTkEntry(top_frame, placeholder_text="Buscar en TMDB / Jikan...", width=300, corner_radius=14)
         self.entry_buscar_online.pack(side='left', padx=5)
         self.entry_buscar_online.bind("<Return>", lambda e: self.on_buscar_online())
         
         btn_buscar = ctk.CTkButton(top_frame, text="Buscar", command=self.on_buscar_online,
-                                   corner_radius=30, fg_color=COLOR_PRIMARY, hover_color=COLOR_HOVER)
+                                   corner_radius=14, fg_color="#7C3AED", hover_color="#6D28D9", text_color="#FFFFFF")
         btn_buscar.pack(side='left', padx=5)
         
         self.scroll_buscar = ctk.CTkScrollableFrame(self.tab_buscar, fg_color="transparent")
@@ -1458,15 +1502,14 @@ class QueVeoHoyApp:
             w.destroy()
             
         for idx, c in enumerate(resultados):
-            card = ctk.CTkFrame(self.scroll_buscar, fg_color=COLOR_BG_CARD, corner_radius=12)
+            card = ctk.CTkFrame(self.scroll_buscar, fg_color="#181524", corner_radius=10, border_width=1, border_color="#262335")
             card.pack(fill='x', padx=10, pady=5)
             
             card.grid_columnconfigure(0, minsize=60) # Poster
-            card.grid_columnconfigure(1, weight=1)   # Titulo
-            card.grid_columnconfigure(2, minsize=100) # Badge
-            card.grid_columnconfigure(3, minsize=160) # Accion
+            card.grid_columnconfigure(1, weight=1)   # Titulo + Subtitulo
+            card.grid_columnconfigure(2, minsize=160) # Accion
             
-            poster_lbl = ctk.CTkLabel(card, text="", width=60, height=90, fg_color="#2B1A4A", corner_radius=8)
+            poster_lbl = ctk.CTkLabel(card, text="", width=60, height=90, fg_color="#2B1A4A", corner_radius=6)
             poster_lbl.grid(row=0, column=0, padx=10, pady=10)
             
             if c.poster_url:
@@ -1476,18 +1519,21 @@ class QueVeoHoyApp:
                         self.root.after(0, lambda: lbl.configure(image=img, text=""))
                 threading.Thread(target=_load_img, args=(c.poster_url, poster_lbl), daemon=True).start()
             
-            lbl_tit = ctk.CTkLabel(card, text=c.titulo, font=FONT_CARD, text_color=COLOR_TEXT, anchor="w", wraplength=200)
-            lbl_tit.grid(row=0, column=1, sticky="w", padx=10, pady=12)
+            text_container = ctk.CTkFrame(card, fg_color="transparent")
+            text_container.grid(row=0, column=1, sticky="w", padx=10, pady=12)
             
-            badge_frame = ctk.CTkFrame(card, fg_color="transparent")
-            badge_frame.grid(row=0, column=2, padx=10, pady=12)
+            lbl_tit = ctk.CTkLabel(text_container, text=c.titulo, font=("Segoe UI", 14, "bold"), text_color="#F1F5F9", anchor="w", wraplength=350)
+            lbl_tit.pack(anchor="w")
             
             tipo_label = "Anime" if c.es_anime else ("Película" if c.tipo == TIPO_PELICULA else "Serie")
-            badge = ui_styles.crear_badge_estado(badge_frame, tipo_label)
-            badge.pack()
+            origen_label = "Jikan (Anime)" if c.es_anime else "TMDB"
+            sub_text = f"{tipo_label} • {origen_label}"
+            
+            lbl_sub = ctk.CTkLabel(text_container, text=sub_text, font=("Segoe UI", 11), text_color="#94A3B8", anchor="w")
+            lbl_sub.pack(anchor="w", pady=(2, 0))
             
             action_frame = ctk.CTkFrame(card, fg_color="transparent")
-            action_frame.grid(row=0, column=3, padx=15, pady=12, sticky="e")
+            action_frame.grid(row=0, column=2, padx=15, pady=12, sticky="e")
             
             estado = repository.obtener_estado_en_biblioteca(c)
             
@@ -1512,12 +1558,14 @@ class QueVeoHoyApp:
                 estado_legible = ESTADOS_LEGIBLES.get(estado, estado)
                 current_val = f"📌 En Biblioteca ({estado_legible})"
                 opt_menu = ctk.CTkOptionMenu(action_frame, values=[current_val] + options, command=handle_action,
-                                             fg_color="#374151", button_color="#4B5563", button_hover_color="#6B7280", font=FONT_SUB)
+                                             corner_radius=14, fg_color="#1E1B2E", button_color="#1E1B2E", button_hover_color="#2A2640",
+                                             text_color="#C084FC", dropdown_fg_color="#181524", dropdown_hover_color="#3B185F", dropdown_text_color="#F1F5F9", font=("Segoe UI", 12))
                 opt_menu.set(current_val)
                 opt_menu.pack(side="right")
             else:
                 opt_menu = ctk.CTkOptionMenu(action_frame, values=["+ Añadir a mi lista..."] + options, command=handle_action,
-                                             fg_color="#10B981", button_color="#059669", button_hover_color="#047857", font=FONT_SUB)
+                                             corner_radius=14, fg_color="#1E1B2E", button_color="#1E1B2E", button_hover_color="#2A2640",
+                                             text_color="#C084FC", dropdown_fg_color="#181524", dropdown_hover_color="#3B185F", dropdown_text_color="#F1F5F9", font=("Segoe UI", 12))
                 opt_menu.set("+ Añadir a mi lista...")
                 opt_menu.pack(side="right")
 
