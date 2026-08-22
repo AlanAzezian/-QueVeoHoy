@@ -5,6 +5,7 @@ import urllib.request
 import io
 import threading
 import os
+import queue
 
 try:
     from PIL import Image, ImageTk
@@ -173,6 +174,10 @@ class ModalProgresoSerie(ctk.CTkToplevel):
 class QueVeoHoyApp:
     def __init__(self, root):
         self.root = root
+        
+        self.ui_queue = queue.Queue()
+        self._process_ui_queue()
+        
         self.root.title("QuéVeoHoy")
         
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -252,6 +257,15 @@ class QueVeoHoyApp:
             messagebox.showwarning("Falta Pillow", "La librería Pillow no está instalada. No se mostrarán los pósters.")
 
         self.root.after(100, self.refrescar_todo)
+        
+    def _process_ui_queue(self):
+        try:
+            while True:
+                func = self.ui_queue.get_nowait()
+                func()
+        except queue.Empty:
+            pass
+        self.root.after(50, self._process_ui_queue)
         
     def _cumple_filtro(self, c, filtro_val):
         is_anime = getattr(c, 'es_anime', False) or getattr(c, 'tipo', '') == 'ANIME' or getattr(c, 'mal_id', None) is not None
@@ -394,7 +408,7 @@ class QueVeoHoyApp:
         self.lbl_titulo.pack(side='top', padx=25, pady=(2, 2))
         
         self.detalle_frame = ctk.CTkFrame(self.card_frame, fg_color="transparent")
-        self.detalle_frame.pack(side='top', pady=(0, 8))
+        self.detalle_frame.pack(side='top', pady=(8, 8))
         
         self.lbl_badge_tipo = ctk.CTkLabel(self.detalle_frame, text="", fg_color="#3B0764", text_color="#C084FC", corner_radius=8, font=("Segoe UI", 10, "bold"))
         self.lbl_badge_tipo.pack(side="left", padx=(0, 8), ipadx=6, ipady=1)
@@ -424,11 +438,26 @@ class QueVeoHoyApp:
             return self.poster_cache[cache_key]
             
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            raw_data = urllib.request.urlopen(req, timeout=5).read()
-            im = Image.open(io.BytesIO(raw_data))
+            import hashlib
+            import urllib.parse
+            import os
+            cache_dir = os.path.join(".", "cache", "posters")
+            os.makedirs(cache_dir, exist_ok=True)
             
-            # Cambiamos la escala original para garantizar que todo quepa en la ventana sin colapsar
+            url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
+            ext = os.path.splitext(urllib.parse.urlparse(url).path)[1]
+            if not ext: ext = ".jpg"
+            file_path = os.path.join(cache_dir, f"{url_hash}{ext}")
+            
+            if os.path.exists(file_path):
+                im = Image.open(file_path)
+            else:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                raw_data = urllib.request.urlopen(req, timeout=5).read()
+                im = Image.open(io.BytesIO(raw_data))
+                with open(file_path, "wb") as f:
+                    f.write(raw_data)
+            
             img = ctk.CTkImage(light_image=im, dark_image=im, size=size)
             self.poster_cache[cache_key] = img
             return img
@@ -501,21 +530,21 @@ class QueVeoHoyApp:
                     img = self._download_poster(rec.poster_url) if rec else None
                     if current_id != self._rec_request_id: return
                     
-                    self.root.after(0, lambda r=rec, i=img: self._apply_rec(r, img=i, current_id=current_id))
-                    self.root.after(0, self._prefetch_next)
+                    self.ui_queue.put(lambda r=rec, i=img: self._apply_rec(r, img=i, current_id=current_id))
+                    self.ui_queue.put(self._prefetch_next)
                 except Exception as e:
                     err_msg = str(e)
                     import traceback
                     traceback.print_exc()
                     if current_id != self._rec_request_id: return
-                    self.root.after(0, lambda msg=err_msg: self._apply_rec(None, error=msg, current_id=current_id))
+                    self.ui_queue.put(lambda msg=err_msg: self._apply_rec(None, error=msg, current_id=current_id))
             threading.Thread(target=_fetch, daemon=True).start()
         else:
             def _fetch_poster():
                 img = self._download_poster(self.recomendacion_actual.poster_url)
                 if current_id != self._rec_request_id: return
-                self.root.after(0, lambda: self._apply_rec(self.recomendacion_actual, img=img, current_id=current_id))
-                self.root.after(0, self._prefetch_next)
+                self.ui_queue.put(lambda: self._apply_rec(self.recomendacion_actual, img=img, current_id=current_id))
+                self.ui_queue.put(self._prefetch_next)
             threading.Thread(target=_fetch_poster, daemon=True).start()
             
     def _apply_rec(self, rec, error=None, img=None, current_id=None):
@@ -629,21 +658,21 @@ class QueVeoHoyApp:
                         if progreso:
                             p, u, fin = recommendation.avanzar_progreso_serie(uc.id)
                             if fin:
-                                self.root.after(0, lambda: self.show_toast(f"¡Has finalizado {c.titulo}!"))
+                                self.ui_queue.put(lambda: self.show_toast(f"¡Has finalizado {c.titulo}!"))
                                 self.recomendacion_actual = None
                             else:
-                                self.root.after(0, lambda p=p: self.show_toast(f"¡Visto! Ahora estás en T{p.temporada_actual} C{p.episodio_actual}"))
+                                self.ui_queue.put(lambda p=p: self.show_toast(f"¡Visto! Ahora estás en T{p.temporada_actual} C{p.episodio_actual}"))
                         else:
                             recommendation.empezar_serie(uc.id)
-                            self.root.after(0, lambda: self.show_toast("¡Serie empezada! T1 C1"))
+                            self.ui_queue.put(lambda: self.show_toast("¡Serie empezada! T1 C1"))
                     else:
                         recommendation.marcar_vista_pelicula(uc.id)
                         self.recomendacion_actual = None
-                        self.root.after(0, lambda: self.show_toast("¡Película marcada como vista!"))
+                        self.ui_queue.put(lambda: self.show_toast("¡Película marcada como vista!"))
                 except Exception as e:
-                    self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+                    self.ui_queue.put(lambda: messagebox.showerror("Error", str(e)))
                 
-                self.root.after(0, self.refrescar_todo)
+                self.ui_queue.put(self.refrescar_todo)
 
             threading.Thread(target=_process, daemon=True).start()
 
@@ -655,8 +684,8 @@ class QueVeoHoyApp:
             def _process():
                 uc = recommendation.agregar_a_biblioteca(c.id)
                 recommendation.guardar_para_despues(uc.id)
-                self.root.after(0, self.refrescar_todo)
-                self.root.after(0, self._prefetch_next)
+                self.ui_queue.put(self.refrescar_todo)
+                self.ui_queue.put(self._prefetch_next)
                 
             threading.Thread(target=_process, daemon=True).start()
             self.refresh_hoy()
@@ -674,8 +703,8 @@ class QueVeoHoyApp:
             
             def _process():
                 recommendation.registrar_siguiente(c.id)
-                self.root.after(0, lambda: self.refresh_hoy(forzar_aleatoria=was_series_in_progress))
-                self.root.after(0, self._prefetch_next)
+                self.ui_queue.put(lambda: self.refresh_hoy(forzar_aleatoria=was_series_in_progress))
+                self.ui_queue.put(self._prefetch_next)
                 
             threading.Thread(target=_process, daemon=True).start()
             
@@ -700,9 +729,9 @@ class QueVeoHoyApp:
             def _process():
                 if uc:
                     recommendation.pausar_serie(uc.id)
-                self.root.after(0, lambda: self.show_toast("Serie pausada."))
-                self.root.after(0, lambda: self.refresh_hoy(forzar_aleatoria=was_series_in_progress))
-                self.root.after(0, self.refrescar_todo)
+                self.ui_queue.put(lambda: self.show_toast("Serie pausada."))
+                self.ui_queue.put(lambda: self.refresh_hoy(forzar_aleatoria=was_series_in_progress))
+                self.ui_queue.put(self.refrescar_todo)
                 
             threading.Thread(target=_process, daemon=True).start()
             
@@ -758,11 +787,11 @@ class QueVeoHoyApp:
                         self.recomendacion_actual = None
                         self.refrescar_todo()
                         
-                    self.root.after(0, _on_success)
+                    self.ui_queue.put(_on_success)
                 except Exception as e:
                     print(f"Error al terminar serie: {e}")
-                    self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
-                    self.root.after(0, self.refrescar_todo)
+                    self.ui_queue.put(lambda: messagebox.showerror("Error", str(e)))
+                    self.ui_queue.put(self.refrescar_todo)
                 
             threading.Thread(target=_process, daemon=True).start()
 
@@ -857,8 +886,8 @@ class QueVeoHoyApp:
             if c and c.poster_url:
                 def _load_img(url, lbl):
                     img = self._download_poster(url, size=(65, 100))
-                    if img and lbl.winfo_exists():
-                        lbl.configure(image=img, text="")
+                    if img:
+                        self.ui_queue.put(lambda l=lbl, i=img: l.configure(image=i, text="") if l.winfo_exists() else None)
                 threading.Thread(target=_load_img, args=(c.poster_url, lbl_poster), daemon=True).start()
             
             # Contenedor para título y badge
@@ -995,10 +1024,10 @@ class QueVeoHoyApp:
         def _process():
             try:
                 p = recommendation.corregir_progreso_serie(uc_id, int(temp), int(ep))
-                self.root.after(0, lambda: self.show_toast(f"Progreso corregido: T{p.temporada_actual} C{p.episodio_actual}"))
+                self.ui_queue.put(lambda: self.show_toast(f"Progreso corregido: T{p.temporada_actual} C{p.episodio_actual}"))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
-            self.root.after(0, self.refrescar_todo)
+                self.ui_queue.put(lambda: messagebox.showerror("Error", str(e)))
+            self.ui_queue.put(self.refrescar_todo)
             
         threading.Thread(target=_process, daemon=True).start()
 
@@ -1487,11 +1516,11 @@ class QueVeoHoyApp:
         def _process():
             try:
                 res = recommendation.buscar_online(query)
-                self.root.after(0, lambda: self._mostrar_resultados_busqueda(res))
+                self.ui_queue.put(lambda: self._mostrar_resultados_busqueda(res))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+                self.ui_queue.put(lambda: messagebox.showerror("Error", str(e)))
             finally:
-                self.root.after(0, lambda: btn.configure(text="Buscar", state="normal"))
+                self.ui_queue.put(lambda: btn.configure(text="Buscar", state="normal"))
                 
         threading.Thread(target=_process, daemon=True).start()
 
@@ -1516,7 +1545,7 @@ class QueVeoHoyApp:
                 def _load_img(url, lbl):
                     img = self._download_poster(url, size=(60, 90))
                     if img:
-                        self.root.after(0, lambda: lbl.configure(image=img, text=""))
+                        self.ui_queue.put(lambda l=lbl, i=img: l.configure(image=i, text="") if l.winfo_exists() else None)
                 threading.Thread(target=_load_img, args=(c.poster_url, poster_lbl), daemon=True).start()
             
             text_container = ctk.CTkFrame(card, fg_color="transparent")
@@ -1617,11 +1646,11 @@ class QueVeoHoyApp:
                 repository.actualizar_estado_usuario_contenido(uc.id, ESTADO_PARA_DESPUES)
                 repository.upsert_historial_recomendacion(c_db.id, "PARA_DESPUES")
                 
-                self.root.after(0, lambda: self.show_toast(f"'{c_db.titulo}' añadido para después."))
-                self.root.after(0, self.refrescar_todo)
-                self.root.after(0, lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
+                self.ui_queue.put(lambda: self.show_toast(f"'{c_db.titulo}' añadido para después."))
+                self.ui_queue.put(self.refrescar_todo)
+                self.ui_queue.put(lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+                self.ui_queue.put(lambda: messagebox.showerror("Error", str(e)))
         threading.Thread(target=_process, daemon=True).start()
         
     def on_buscar_ya_vi(self, idx=None):
@@ -1635,11 +1664,11 @@ class QueVeoHoyApp:
                 repository.actualizar_estado_usuario_contenido(uc.id, ESTADO_TERMINADA)
                 repository.upsert_historial_recomendacion(c_db.id, "YA_LA_VI")
                 
-                self.root.after(0, lambda: self.show_toast(f"'{c_db.titulo}' marcada como vista."))
-                self.root.after(0, self.refrescar_todo)
-                self.root.after(0, lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
+                self.ui_queue.put(lambda: self.show_toast(f"'{c_db.titulo}' marcada como vista."))
+                self.ui_queue.put(self.refrescar_todo)
+                self.ui_queue.put(lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+                self.ui_queue.put(lambda: messagebox.showerror("Error", str(e)))
         threading.Thread(target=_process, daemon=True).start()
         
     def on_buscar_empezar(self, idx=None):
@@ -1652,14 +1681,14 @@ class QueVeoHoyApp:
                 
                 progreso = repository.obtener_progreso_serie(uc.id)
                 if progreso:
-                    self.root.after(0, lambda: messagebox.showwarning("Aviso", "Ya estabas viendo esta serie."))
+                    self.ui_queue.put(lambda: messagebox.showwarning("Aviso", "Ya estabas viendo esta serie."))
                 else:
                     recommendation.empezar_serie(uc.id)
-                    self.root.after(0, lambda: self.show_toast(f"¡Empezaste '{c_db.titulo}'! (T1 C1)"))
-                self.root.after(0, self.refrescar_todo)
-                self.root.after(0, lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
+                    self.ui_queue.put(lambda: self.show_toast(f"¡Empezaste '{c_db.titulo}'! (T1 C1)"))
+                self.ui_queue.put(self.refrescar_todo)
+                self.ui_queue.put(lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+                self.ui_queue.put(lambda: messagebox.showerror("Error", str(e)))
         threading.Thread(target=_process, daemon=True).start()
 
     def on_buscar_ya_viendo(self, idx=None):
@@ -1684,12 +1713,12 @@ class QueVeoHoyApp:
                 c_db = self._asegurar_contenido_bd(idx)
                 uc = recommendation.agregar_a_biblioteca(c_db.id)
                 p, _ = recommendation.marcar_serie_terminada(uc.id)
-                self.root.after(0, lambda: self.show_toast(f"'{c_db.titulo}' terminada en T{p.temporada_actual} C{p.episodio_actual}"))
+                self.ui_queue.put(lambda: self.show_toast(f"'{c_db.titulo}' terminada en T{p.temporada_actual} C{p.episodio_actual}"))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+                self.ui_queue.put(lambda: messagebox.showerror("Error", str(e)))
             finally:
-                self.root.after(0, self.refrescar_todo)
-                self.root.after(0, lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
+                self.ui_queue.put(self.refrescar_todo)
+                self.ui_queue.put(lambda: self._mostrar_resultados_busqueda(self.resultados_busqueda))
                 
         threading.Thread(target=_process, daemon=True).start()
 

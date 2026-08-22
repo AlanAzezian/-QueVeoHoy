@@ -699,13 +699,6 @@ def recomendacion_de_hoy(ignorar_id: int = None, es_prefetch: bool = False, forz
         candidatos_validos.append(cont)
         
     if not candidatos_validos:
-        inactivos = obtener_biblioteca_inactiva()
-        pendientes = [elem for elem in inactivos if elem.usuario_contenido.estado == PENDIENTE]
-        if pendientes:
-            rec = pendientes[0].contenido
-            if not es_prefetch:
-                repository.upsert_historial_recomendacion(rec.id, "RECOMENDADA_HOY")
-            return rec
         return None
         
     elegido = random.choice(candidatos_validos)
