@@ -745,22 +745,18 @@ class QueVeoHoyApp:
         header_frame = ctk.CTkFrame(self.prog_list_container, fg_color=COLOR_BG, corner_radius=8)
         header_frame.pack(fill='x', padx=5, pady=5)
         
-        header_frame.grid_columnconfigure(0, minsize=320, weight=0)
+        header_frame.grid_columnconfigure(0, minsize=430, weight=0)
         header_frame.grid_columnconfigure(1, minsize=110, weight=0)
-        header_frame.grid_columnconfigure(2, minsize=110, weight=0)
-        header_frame.grid_columnconfigure(3, minsize=140, weight=1)
+        header_frame.grid_columnconfigure(2, minsize=140, weight=1)
         
-        lbl_h_titulo = ctk.CTkLabel(header_frame, text="TÍTULO", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
+        lbl_h_titulo = ctk.CTkLabel(header_frame, text="SERIE / TÍTULO", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
         lbl_h_titulo.grid(row=0, column=0, sticky="w", padx=(20, 10), pady=8)
         
-        lbl_h_tipo = ctk.CTkLabel(header_frame, text="TIPO", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_tipo.grid(row=0, column=1, sticky="w", pady=8)
-        
         lbl_h_avance = ctk.CTkLabel(header_frame, text="AVANCE", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_avance.grid(row=0, column=2, sticky="w", pady=8)
+        lbl_h_avance.grid(row=0, column=1, sticky="w", pady=8)
         
         lbl_h_estado = ctk.CTkLabel(header_frame, text="ESTADO", font=("Segoe UI", 11, "bold"), text_color=COLOR_TEXT_SEC)
-        lbl_h_estado.grid(row=0, column=3, sticky="w", pady=8)
+        lbl_h_estado.grid(row=0, column=2, sticky="w", pady=8)
         
         # Scrollable Area
         self.scroll_progreso = ctk.CTkScrollableFrame(self.prog_list_container, fg_color="transparent",
@@ -811,19 +807,41 @@ class QueVeoHoyApp:
             row_frame = ctk.CTkFrame(self.scroll_progreso, fg_color="transparent", corner_radius=8, cursor="hand2")
             row_frame.pack(fill='x', padx=5, pady=0)
             
-            row_frame.grid_columnconfigure(0, minsize=320, weight=0)
+            row_frame.grid_columnconfigure(0, minsize=430, weight=0)
             row_frame.grid_columnconfigure(1, minsize=110, weight=0)
-            row_frame.grid_columnconfigure(2, minsize=110, weight=0)
-            row_frame.grid_columnconfigure(3, minsize=140, weight=1)
+            row_frame.grid_columnconfigure(2, minsize=140, weight=1)
             
-            lbl_tit = ctk.CTkLabel(row_frame, text=item.titulo, font=FONT_CARD, text_color=COLOR_TEXT, anchor="w", cursor="hand2")
-            lbl_tit.grid(row=0, column=0, sticky="w", padx=(20, 10), pady=12)
+            # --- COLUMNA 0: TÍTULO Y PÓSTER ---
+            tit_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
+            tit_frame.grid(row=0, column=0, sticky="w", padx=(20, 10), pady=10)
             
-            lbl_tipo = ctk.CTkLabel(row_frame, text=tipo_legible, font=FONT_SUB, text_color=COLOR_TEXT_SEC, anchor="w", cursor="hand2")
-            lbl_tipo.grid(row=0, column=1, sticky="w", pady=12)
+            # Póster (65x100)
+            lbl_poster = ctk.CTkLabel(tit_frame, text="🎬", width=65, height=100, fg_color="#2B1A4A", corner_radius=6, cursor="hand2")
+            lbl_poster.pack(side="left", padx=(0, 15))
             
+            c = repository.obtener_contenido_por_id(item.contenido_id)
+            if c and c.poster_url:
+                def _load_img(url, lbl):
+                    img = self._download_poster(url, size=(65, 100))
+                    if img and lbl.winfo_exists():
+                        lbl.configure(image=img, text="")
+                threading.Thread(target=_load_img, args=(c.poster_url, lbl_poster), daemon=True).start()
+            
+            # Contenedor para título y badge
+            text_container = ctk.CTkFrame(tit_frame, fg_color="transparent", cursor="hand2")
+            text_container.pack(side="left", anchor="center")
+            
+            lbl_tit = ctk.CTkLabel(text_container, text=item.titulo, font=("Segoe UI", 14, "bold"), text_color=COLOR_TEXT, anchor="w", cursor="hand2")
+            lbl_tit.pack(anchor="w")
+            
+            if item.es_anime:
+                anime_badge = ctk.CTkFrame(text_container, fg_color="#3B0764", corner_radius=4, cursor="hand2")
+                anime_badge.pack(anchor="w", pady=(4, 0))
+                ctk.CTkLabel(anime_badge, text="ANIME", font=("Segoe UI", 9, "bold"), text_color="#C084FC", cursor="hand2").pack(padx=6, pady=2)
+            
+            # --- COLUMNA 1: AVANCE ---
             avance_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
-            avance_frame.grid(row=0, column=2, sticky="w", pady=12)
+            avance_frame.grid(row=0, column=1, sticky="w", pady=10)
             
             # Formatear el texto de avance en cyan claro y ubicarlo alineado
             lbl_avance = ctk.CTkLabel(avance_frame, text=avance, font=("Segoe UI", 12, "bold"), text_color="#06B6D4", anchor="w", cursor="hand2")
@@ -845,11 +863,12 @@ class QueVeoHoyApp:
             prog_bar.pack(side="top", pady=(4, 0), anchor="w")
             prog_bar.set(porcentaje)
             
+            # --- COLUMNA 2: ESTADO ---
             badge_frame = ctk.CTkFrame(row_frame, fg_color="transparent", cursor="hand2")
-            badge_frame.grid(row=0, column=3, sticky="w", pady=12)
+            badge_frame.grid(row=0, column=2, sticky="w", pady=10)
             
             badge = ui_styles.crear_badge_estado(badge_frame, estado_legible)
-            badge.pack(anchor="center")
+            badge.pack(anchor="w")
             
             # Separador sutil
             if idx < len(items) - 1:
@@ -861,8 +880,12 @@ class QueVeoHoyApp:
                 self.select_progreso_row(r, u)
                 
             row_frame.bind("<Button-1>", on_click)
+            tit_frame.bind("<Button-1>", on_click)
+            lbl_poster.bind("<Button-1>", on_click)
+            text_container.bind("<Button-1>", on_click)
             lbl_tit.bind("<Button-1>", on_click)
-            lbl_tipo.bind("<Button-1>", on_click)
+            if item.es_anime:
+                anime_badge.bind("<Button-1>", on_click)
             avance_frame.bind("<Button-1>", on_click)
             lbl_avance.bind("<Button-1>", on_click)
             prog_bar.bind("<Button-1>", on_click)
