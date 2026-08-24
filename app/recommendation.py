@@ -264,7 +264,7 @@ def importar_progreso_serie(
     episodio_actual: int,
     marcar_anteriores: bool = False,
     episodio_absoluto_actual: int | None = None,
-) -> ProgresoSerie:
+) -> tuple[ProgresoSerie, bool]:
     """
     Registra el progreso de una serie que el usuario ya venía viendo antes de
     instalar QuéVeoHoy ("Ya la estoy viendo"). Transiciona PENDIENTE -> EN_PROGRESO
@@ -335,7 +335,26 @@ def importar_progreso_serie(
     repository.upsert_progreso_serie(progreso)
     repository.upsert_historial_recomendacion(contenido.id, "EMPEZAR_EN_PROGRESO")
     
-    return progreso
+    es_fin = False
+    if 'meta' not in locals():
+        meta = repository.obtener_tv_metadata(contenido.id)
+    if meta:
+        import json
+        temporadas_dict = json.loads(meta['temporadas_json'])
+        keys = [int(k) for k in temporadas_dict.keys() if int(k) > 0]
+        if not keys:
+            keys = [int(k) for k in temporadas_dict.keys()]
+        if keys:
+            max_t = max(keys)
+            if temporada_actual == max_t:
+                max_ep = temporadas_dict.get(str(max_t), 0)
+                if episodio_actual >= max_ep and max_ep > 0:
+                    es_fin = True
+
+    if es_fin:
+        cambiar_estado(usuario_contenido_id, TERMINADA)
+        
+    return progreso, es_fin
 
 def vi_este_capitulo(
     usuario_contenido_id: int,
@@ -673,11 +692,13 @@ def recomendacion_de_hoy(ignorar_id: int = None, es_prefetch: bool = False, forz
     # 10 de cada uno
     peliculas = tmdb_provider.obtener_tendencias_peliculas()[:10]
     series = tmdb_provider.obtener_tendencias_series()[:10]
-    animes = jikan_provider.obtener_tendencias_anime()[:10]
+    anime_series = jikan_provider.obtener_tendencias_anime(tipo="tv")[:10]
+    anime_movies = jikan_provider.obtener_tendencias_anime(tipo="movie")[:10]
     
     bolsa.extend(peliculas)
     bolsa.extend(series)
-    bolsa.extend(animes)
+    bolsa.extend(anime_series)
+    bolsa.extend(anime_movies)
     
     candidatos_validos = []
     for cont in bolsa:
@@ -768,7 +789,7 @@ def avanzar_progreso_serie(usuario_contenido_id: int) -> tuple[ProgresoSerie, Us
         p, u = vi_este_capitulo(uc.id, prog.temporada_actual, ep_actual + 1, ep_abs, False)
         return p, u, False
 
-def corregir_progreso_serie(usuario_contenido_id: int, nueva_temporada: int, nuevo_episodio: int, nuevo_episodio_absoluto: int | None = None) -> ProgresoSerie:
+def corregir_progreso_serie(usuario_contenido_id: int, nueva_temporada: int, nuevo_episodio: int, nuevo_episodio_absoluto: int | None = None) -> tuple[ProgresoSerie, bool]:
     """
     Corrige el progreso modificando episodios_vistos (eliminando posteriores o rellenando faltantes).
     Luego recalcula progreso_serie.
@@ -834,11 +855,32 @@ def corregir_progreso_serie(usuario_contenido_id: int, nueva_temporada: int, nue
     prog.episodio_absoluto_actual = nuevo_episodio_absoluto
     repository.upsert_progreso_serie(prog)
     
-    # 4. Ajustar estado si era terminada y la corrigió hacia atrás
-    if uc.estado == TERMINADA:
+    # 3.5. Chequear si es el fin de la serie
+    es_fin = False
+    if meta:
+        import json
+        temporadas_dict = json.loads(meta['temporadas_json'])
+        # Ignoramos la temporada 0 (especiales) para el cálculo del final, o simplemente tomamos la máxima
+        keys = [int(k) for k in temporadas_dict.keys() if int(k) > 0]
+        if not keys:
+            keys = [int(k) for k in temporadas_dict.keys()]
+            
+        if keys:
+            max_t = max(keys)
+            if nueva_temporada == max_t:
+                max_ep = temporadas_dict.get(str(max_t), 0)
+                if nuevo_episodio >= max_ep and max_ep > 0:
+                    es_fin = True
+
+    # 4. Ajustar estado
+    if es_fin:
+        cambiar_estado(uc.id, TERMINADA)
+    elif uc.estado == TERMINADA:
         cambiar_estado(uc.id, EN_PROGRESO)
         
-    return prog
+    repository.upsert_historial_recomendacion(c.id, "AJUSTE_PROGRESO", detalle=f"Ajustó progreso a T{nueva_temporada} C{nuevo_episodio}")
+        
+    return prog, es_fin
 
 def eliminar_de_biblioteca(usuario_contenido_ids: list[int]) -> None:
     """Elimina permanentemente de la biblioteca los IDs provistos."""

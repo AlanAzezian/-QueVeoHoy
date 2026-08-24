@@ -171,18 +171,19 @@ def upsert_progreso_serie(progreso: ProgresoSerie) -> None:
     conn.commit()
     conn.close()
 
-def upsert_historial_recomendacion(contenido_id: int, accion: str) -> None:
+def upsert_historial_recomendacion(contenido_id: int, accion: str, detalle: str = None) -> None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO historial_recomendaciones (
-            contenido_id, fecha, accion, veces_mostrada
-        ) VALUES (?, datetime('now'), ?, 1)
+            contenido_id, fecha, accion, veces_mostrada, detalle
+        ) VALUES (?, datetime('now'), ?, 1, ?)
         ON CONFLICT(contenido_id) DO UPDATE SET
             fecha = excluded.fecha,
             accion = excluded.accion,
-            veces_mostrada = veces_mostrada + 1
-    ''', (contenido_id, accion))
+            veces_mostrada = veces_mostrada + 1,
+            detalle = excluded.detalle
+    ''', (contenido_id, accion, detalle))
     conn.commit()
     conn.close()
 

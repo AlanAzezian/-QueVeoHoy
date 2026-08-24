@@ -4,7 +4,8 @@ from pathlib import Path
 DB_FILE = Path.home() / '.queveohoy.db'
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_FILE))
+    conn = sqlite3.connect(str(DB_FILE), timeout=10.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.row_factory = sqlite3.Row
     return conn
@@ -94,10 +95,11 @@ CREATE INDEX IF NOT EXISTS idx_episodios_vistos_usuario_contenido ON episodios_v
 CREATE TABLE IF NOT EXISTS historial_recomendaciones (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     contenido_id    INTEGER NOT NULL UNIQUE REFERENCES contenido(id),
-    fecha           TEXT NOT NULL DEFAULT (datetime('now')),  -- última vez que apareció
+    fecha           TEXT NOT NULL DEFAULT (datetime('now')),
     accion          TEXT NOT NULL CHECK (
-                        accion IN ('SIGUIENTE', 'PARA_DESPUES', 'EMPEZAR_EN_PROGRESO', 'YA_LA_VI', 'RECOMENDADA_HOY')
+                        accion IN ('SIGUIENTE', 'PARA_DESPUES', 'EMPEZAR_EN_PROGRESO', 'YA_LA_VI', 'RECOMENDADA_HOY', 'AJUSTE_PROGRESO')
                     ),
+    detalle         TEXT,
     veces_mostrada  INTEGER NOT NULL DEFAULT 1
 );
 -- =========================================================
@@ -122,6 +124,37 @@ CREATE TABLE IF NOT EXISTS tv_metadata_cache (
            OR LOWER(titulo) LIKE '%naruto%' 
            OR LOWER(titulo) LIKE '%hero academia%';
     ''')
+
+    # Migración de historial_recomendaciones
+    try:
+        # Check if detalle column exists, if it fails, it means we need to migrate
+        cursor.execute("SELECT detalle FROM historial_recomendaciones LIMIT 1")
+    except sqlite3.OperationalError:
+        print("Realizando migración de historial_recomendaciones...")
+        cursor.executescript('''
+            PRAGMA foreign_keys=off;
+            
+            ALTER TABLE historial_recomendaciones RENAME TO historial_recomendaciones_old;
+            
+            CREATE TABLE historial_recomendaciones (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                contenido_id    INTEGER NOT NULL UNIQUE REFERENCES contenido(id),
+                fecha           TEXT NOT NULL DEFAULT (datetime('now')),
+                accion          TEXT NOT NULL CHECK (
+                                    accion IN ('SIGUIENTE', 'PARA_DESPUES', 'EMPEZAR_EN_PROGRESO', 'YA_LA_VI', 'RECOMENDADA_HOY', 'AJUSTE_PROGRESO')
+                                ),
+                detalle         TEXT,
+                veces_mostrada  INTEGER NOT NULL DEFAULT 1
+            );
+            
+            INSERT INTO historial_recomendaciones (id, contenido_id, fecha, accion, veces_mostrada, detalle)
+            SELECT id, contenido_id, fecha, accion, veces_mostrada, NULL
+            FROM historial_recomendaciones_old;
+            
+            DROP TABLE historial_recomendaciones_old;
+            
+            PRAGMA foreign_keys=on;
+        ''')
 
     conn.commit()
     conn.close()

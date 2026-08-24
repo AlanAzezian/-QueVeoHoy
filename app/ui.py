@@ -157,19 +157,171 @@ class ModalProgresoSerie(ctk.CTkToplevel):
         
         def _process():
             try:
-                p = recommendation.importar_progreso_serie(
+                p, fin = recommendation.importar_progreso_serie(
                     self.uc_id,
                     temp,
                     ep,
                     marcar_anteriores=True
                 )
-                self.after(0, lambda: self.on_success(p))
+                self.after(0, lambda: self.on_success(p, fin))
                 self.after(0, self.destroy)
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror("Error", str(e)))
                 self.after(0, lambda: self.btn_confirmar.configure(text="Confirmar", state="normal"))
                 
         threading.Thread(target=_process, daemon=True).start()
+
+class ModalAjusteProgreso(ctk.CTkToplevel):
+    def __init__(self, master, contenido, uc_id, on_success):
+        super().__init__(master)
+        self.title("Ajustar progreso")
+        self.geometry("400x300")
+        self.resizable(False, False)
+        
+        self.update_idletasks()
+        x = master.winfo_rootx() + (master.winfo_width() - 400) // 2
+        y = master.winfo_rooty() + (master.winfo_height() - 300) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        self.contenido = contenido
+        self.uc_id = uc_id
+        self.on_success = on_success
+        
+        self.temporadas_dict = {}
+        
+        self.lbl_status = ctk.CTkLabel(self, text="Cargando temporadas...", font=("Helvetica", 14))
+        self.lbl_status.pack(pady=20)
+        
+        self.opt_temporada = ctk.CTkOptionMenu(self, values=["Cargando..."], command=self.on_temporada_change)
+        self.opt_temporada.pack(pady=10)
+        self.opt_temporada.set("Cargando...")
+        self.opt_temporada.configure(state="disabled")
+        
+        self.opt_capitulo = ctk.CTkOptionMenu(self, values=["Cargando..."])
+        self.opt_capitulo.pack(pady=10)
+        self.opt_capitulo.set("Cargando...")
+        self.opt_capitulo.configure(state="disabled")
+        
+        self.btn_confirmar = ctk.CTkButton(self, text="Confirmar", command=self.on_confirmar, state="disabled")
+        self.btn_confirmar.pack(pady=20)
+        
+        self.transient(master)
+        self.grab_set()
+        
+        threading.Thread(target=self.load_metadata, daemon=True).start()
+        
+    def load_metadata(self):
+        try:
+            from app.providers.tmdb import TMDBProvider
+            from app.providers.jikan import JikanProvider
+            import json
+            
+            meta = repository.obtener_tv_metadata(self.contenido.id)
+            if not meta:
+                if self.contenido.es_anime and self.contenido.mal_id:
+                    provider = JikanProvider()
+                    temporadas = provider.obtener_temporadas(self.contenido.mal_id)
+                else:
+                    provider = TMDBProvider()
+                    temporadas = provider.obtener_temporadas(self.contenido.tmdb_id)
+                repository.upsert_tv_metadata(self.contenido.id, len(temporadas), json.dumps(temporadas))
+                meta = repository.obtener_tv_metadata(self.contenido.id)
+                
+            if meta:
+                self.temporadas_dict = json.loads(meta['temporadas_json'])
+                
+            self.after(0, self.populate_temporadas)
+        except Exception as e:
+            self.after(0, lambda: self.lbl_status.configure(text=f"Error: {str(e)}"))
+            
+    def populate_temporadas(self):
+        self.lbl_status.configure(text="Ajustá la temporada y el capítulo:")
+        
+        if not self.temporadas_dict:
+            self.temporadas_dict = {"1": 1000}
+            
+        t_keys = sorted(self.temporadas_dict.keys(), key=lambda x: int(x))
+        t_values = [f"Temporada {k}" for k in t_keys]
+        
+        self.opt_temporada.configure(values=t_values, state="normal")
+        if t_values:
+            self.opt_temporada.set(t_values[0])
+            self.on_temporada_change(t_values[0])
+            
+    def on_temporada_change(self, choice):
+        t_num = choice.replace("Temporada ", "")
+        max_eps = self.temporadas_dict.get(t_num, 0)
+        
+        if max_eps == 0:
+            max_eps = 1000
+            
+        ep_values = [f"Capítulo {i}" for i in range(1, max_eps + 1)]
+        self.opt_capitulo.configure(values=ep_values, state="normal")
+        if ep_values:
+            self.opt_capitulo.set(ep_values[0])
+            
+        self.btn_confirmar.configure(state="normal")
+        
+    def on_confirmar(self):
+        t_str = self.opt_temporada.get().replace("Temporada ", "")
+        ep_str = self.opt_capitulo.get().replace("Capítulo ", "")
+        
+        if not t_str.isdigit() or not ep_str.isdigit():
+            return
+            
+        temp = int(t_str)
+        ep = int(ep_str)
+        
+        self.btn_confirmar.configure(text="Guardando...", state="disabled")
+        
+        def _process():
+            try:
+                p, fin = recommendation.corregir_progreso_serie(
+                    self.uc_id,
+                    temp,
+                    ep
+                )
+                self.after(0, lambda: self.on_success(p, fin))
+                self.after(0, self.destroy)
+            except Exception as e:
+                self.after(0, lambda e=e: messagebox.showerror("Error", str(e), parent=self))
+                self.after(0, lambda: self.btn_confirmar.configure(text="Confirmar", state="normal"))
+        threading.Thread(target=_process, daemon=True).start()
+
+class ModalCelebracion(ctk.CTkToplevel):
+    def __init__(self, master, titulo_serie, on_close):
+        super().__init__(master)
+        self.title("¡Felicitaciones!")
+        self.geometry("450x250")
+        self.resizable(False, False)
+        
+        self.update_idletasks()
+        x = master.winfo_rootx() + (master.winfo_width() - 450) // 2
+        y = master.winfo_rooty() + (master.winfo_height() - 250) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        self.on_close = on_close
+        
+        self.lbl_icon = ctk.CTkLabel(self, text="🏆 🎉", font=("Helvetica", 40))
+        self.lbl_icon.pack(pady=(20, 10))
+        
+        self.lbl_titulo = ctk.CTkLabel(self, text=f"¡Felicidades! Completaste {titulo_serie}", font=("Helvetica", 18, "bold"))
+        self.lbl_titulo.pack(pady=5)
+        
+        self.lbl_sub = ctk.CTkLabel(self, text="La serie ha sido movida a tu Biblioteca como 'Terminada'.", font=("Helvetica", 12))
+        self.lbl_sub.pack(pady=(0, 15))
+        
+        self.btn_genial = ctk.CTkButton(self, text="¡Genial!", fg_color="#581C87", hover_color="#4C1D95", command=self._on_btn_click)
+        self.btn_genial.pack(pady=10)
+        
+        self.protocol("WM_DELETE_WINDOW", self._on_btn_click)
+        self.transient(master)
+        self.grab_set()
+
+    def _on_btn_click(self):
+        if self.on_close:
+            self.on_close()
+        self.destroy()
 
 class QueVeoHoyApp:
     def __init__(self, root):
@@ -215,6 +367,8 @@ class QueVeoHoyApp:
         
         self.content_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         self.content_frame.pack(expand=True, fill='both', padx=20, pady=10)
+        self.content_frame.grid_rowconfigure(0, weight=1)
+        self.content_frame.grid_columnconfigure(0, weight=1)
         
         self.tabs = {}
         self.nav_buttons = {}
@@ -229,6 +383,7 @@ class QueVeoHoyApp:
             self.nav_buttons[t_name] = btn
             
             frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+            frame.grid(row=0, column=0, sticky="nsew")
             self.tabs[t_name] = frame
             
         self.tab_hoy = self.tabs["Hoy"]
@@ -237,6 +392,13 @@ class QueVeoHoyApp:
         self.tab_historial = self.tabs["Historial"]
         self.tab_buscar = self.tabs["Buscar"]
         
+        self.tab_needs_refresh = {
+            "Hoy": True,
+            "En progreso": True,
+            "Biblioteca": True,
+            "Historial": True,
+            "Buscar": True
+        }
         
         self.poster_cache = {}
         self.recomendacion_actual = None
@@ -256,16 +418,29 @@ class QueVeoHoyApp:
         if not HAS_PILLOW:
             messagebox.showwarning("Falta Pillow", "La librería Pillow no está instalada. No se mostrarán los pósters.")
 
-        self.root.after(100, self.refrescar_todo)
+        self.root.after(100, self.iniciar_pre_renderizado)
+        
+    def iniciar_pre_renderizado(self):
+        self.refresh_hoy()
+        self.root.after(100, self.refresh_en_progreso)
+        self.root.after(300, self.refresh_pendientes)
+        self.root.after(500, self.refresh_historial)
+        
+        for tab in self.tab_needs_refresh:
+            self.tab_needs_refresh[tab] = False
         
     def _process_ui_queue(self):
         try:
             while True:
                 func = self.ui_queue.get_nowait()
-                func()
+                try:
+                    func()
+                except Exception as e:
+                    print(f"Error procesando tarea en UI queue: {e}")
         except queue.Empty:
             pass
-        self.root.after(50, self._process_ui_queue)
+        finally:
+            self.root.after(50, self._process_ui_queue)
         
     def _cumple_filtro(self, c, filtro_val):
         is_anime = getattr(c, 'es_anime', False) or getattr(c, 'tipo', '') == 'ANIME' or getattr(c, 'mal_id', None) is not None
@@ -331,103 +506,115 @@ class QueVeoHoyApp:
             return
             
         if self.current_tab:
-            self.tabs[self.current_tab].pack_forget()
             self.nav_buttons[self.current_tab].configure(fg_color="transparent", border_width=0, text_color="#94A3B8")
             
         self.current_tab = tab_name
-        self.tabs[tab_name].pack(expand=True, fill='both')
+        self.tabs[tab_name].tkraise()
         self.nav_buttons[tab_name].configure(fg_color="#3B185F", border_width=1, border_color="#7C3AED", text_color="#FFFFFF")
-        
-        self.on_tab_changed()
-
-    def on_tab_changed(self):
-        self.refrescar_todo()
 
     def refrescar_todo(self):
+        self.iniciar_pre_renderizado()
+        
+    def refrescar_final_serie(self):
+        """Refresca las vistas de manera síncrona luego de terminar una serie."""
+        self._next_rec_cache = None
+        self.recomendacion_actual = None
+        self._is_fetching_rec = False
+        
+        # Limpiar flags de tabs porque vamos a forzar su renderizado atómico
+        for tab in self.tab_needs_refresh:
+            self.tab_needs_refresh[tab] = False
+            
         self.refresh_hoy()
         self.refresh_en_progreso()
         self.refresh_pendientes()
         self.refresh_historial()
+        
+    def _marcar_tabs_sucias(self):
+        self.root.after(100, self.refresh_en_progreso)
+        self.root.after(300, self.refresh_pendientes)
+        self.root.after(500, self.refresh_historial)
 
-    # --- PESTAÑA HOY ---
     def setup_tab_hoy(self):
         # Frame central tipo tarjeta
         self.card_frame = ctk.CTkFrame(self.tab_hoy, fg_color=COLOR_BG_CARD, corner_radius=20)
         self.card_frame.pack(expand=True, fill='both', padx=40, pady=(0, 5))
+
+        # State Machine Containers
+        self.msg_frame = ctk.CTkFrame(self.card_frame, fg_color="transparent")
+        self.lbl_msg_titulo = ctk.CTkLabel(self.msg_frame, text="", font=("Helvetica", 22, "bold"), text_color=COLOR_TEXT)
+        self.lbl_msg_titulo.pack(side='top', padx=25, pady=(40, 2))
+        self.lbl_msg_sub = ctk.CTkLabel(self.msg_frame, text="", font=("Segoe UI", 15), text_color="#CBD5E1")
+        self.lbl_msg_sub.pack(side='top', padx=30, pady=(12, 16))
+        self.btn_msg_accion = ctk.CTkButton(self.msg_frame, text="⏭ Intentar de nuevo", command=self.on_siguiente, corner_radius=14, font=("Segoe UI", 12, "bold"))
+        self.btn_msg_accion.pack(side='top', pady=20)
+
+        self.content_container = ctk.CTkFrame(self.card_frame, fg_color="transparent")
         
-        # Botones anclados abajo (se empaquetan primero para garantizar su visibilidad en el fondo)
-        btn_frame_sec = ctk.CTkFrame(self.card_frame, fg_color="transparent")
-        btn_frame_sec.pack(side='bottom', pady=(5, 15))
+        # Action Buttons Bottom
+        self.btn_frame_sec = ctk.CTkFrame(self.content_container, fg_color="transparent")
+        self.btn_frame_sec.pack(side='bottom', pady=(5, 15))
         
-        btn_frame_main = ctk.CTkFrame(self.card_frame, fg_color="transparent")
-        btn_frame_main.pack(side='bottom', pady=(0, 5))
+        self.btn_frame_main = ctk.CTkFrame(self.content_container, fg_color="transparent")
+        self.btn_frame_main.pack(side='bottom', pady=(0, 5))
         
-        self.btn_visto = ctk.CTkButton(btn_frame_main, text="✔ Ya la vi", command=self.on_marcar_visto, 
+        self.btn_visto = ctk.CTkButton(self.btn_frame_main, text="✔ Ya la vi", command=self.on_marcar_visto, 
                                        width=280, corner_radius=16, fg_color="#059669", hover_color="#10B981", 
                                        text_color="#FFFFFF", border_width=0, font=("Segoe UI", 13, "bold"))
         self.btn_visto.pack(side='top')
         
-        self.btn_para_despues = ctk.CTkButton(btn_frame_sec, text="🕒 Dejar para después", command=self.on_para_despues, 
+        self.btn_para_despues = ctk.CTkButton(self.btn_frame_sec, text="🕒 Dejar para después", command=self.on_para_despues, 
                                               corner_radius=14, fg_color="#78350F", hover_color="#451A03", 
                                               text_color="#F59E0B", border_color="#D97706", border_width=2, font=("Segoe UI", 12, "bold"))
                                               
-        self.btn_siguiente = ctk.CTkButton(btn_frame_sec, text="⏭ Siguiente", command=self.on_siguiente, 
+        self.btn_siguiente = ctk.CTkButton(self.btn_frame_sec, text="⏭ Siguiente", command=self.on_siguiente, 
                                            corner_radius=14, fg_color="#4C1D95", hover_color="#3B0764", 
                                            text_color="#DDD6FE", border_color="#DDD6FE", border_width=2, font=("Segoe UI", 12, "bold"))
         
-        self.btn_pausar = ctk.CTkButton(btn_frame_sec, text="⏸ Pausar", command=self.on_pausar, 
+        self.btn_pausar = ctk.CTkButton(self.btn_frame_sec, text="⏸ Pausar", command=self.on_pausar, 
                                         corner_radius=14, fg_color="#78350F", hover_color="#451A03", 
                                         text_color="#F59E0B", border_color="#F59E0B", border_width=2, font=("Segoe UI", 12, "bold"))
                                         
-        self.btn_abandonar = ctk.CTkButton(btn_frame_sec, text="✕ Abandonar", command=self.on_abandonar, 
+        self.btn_abandonar = ctk.CTkButton(self.btn_frame_sec, text="✕ Abandonar", command=self.on_abandonar, 
                                            corner_radius=14, fg_color="#7F1D1D", hover_color="#450A0A", 
                                            text_color="#FCA5A5", border_color="#FCA5A5", border_width=2, font=("Segoe UI", 12, "bold"))
                                            
-        self.btn_ya_viendo = ctk.CTkButton(btn_frame_sec, text="▶ Ya la estoy viendo", command=self.on_ya_viendo, 
+        self.btn_ya_viendo = ctk.CTkButton(self.btn_frame_sec, text="▶ Ya la estoy viendo", command=self.on_ya_viendo, 
                                            corner_radius=14, fg_color="#164E63", hover_color="#083344", 
                                            text_color="#06B6D4", border_color="#0891B2", border_width=2, font=("Segoe UI", 12, "bold"))
                                            
-        self.btn_ya_termine = ctk.CTkButton(btn_frame_sec, text="✔ Ya la terminé", command=self.on_ya_termine, 
+        self.btn_ya_termine = ctk.CTkButton(self.btn_frame_sec, text="✔ Ya la terminé", command=self.on_ya_termine, 
                                             corner_radius=14, fg_color="#064E3B", hover_color="#042F2E", 
                                             text_color="#10B981", border_color="#059669", border_width=2, font=("Segoe UI", 12, "bold"))
-        
-        self.btn_para_despues.pack(side='left', padx=5)
-        self.btn_siguiente.pack(side='left', padx=5)
+                                            
+        self.btn_ajustar_progreso = ctk.CTkButton(self.btn_frame_sec, text="✏ Ajustar", command=self.on_ajustar_progreso, 
+                                                  width=80, corner_radius=14, fg_color="#3B0764", hover_color="#581C87", 
+                                                  text_color="#D8B4FE", border_color="#D8B4FE", border_width=2, font=("Segoe UI", 12, "bold"))
 
-        # Póster Frame (Aura / Profundidad)
-        self.shadow_frame = ctk.CTkFrame(self.card_frame, fg_color="transparent", 
+        # Poster
+        self.shadow_frame = ctk.CTkFrame(self.content_container, fg_color="transparent", 
                                          corner_radius=16, border_width=3, border_color="#A855F7")
         self.shadow_frame.pack(side='top', pady=(10, 2))
-        
-        # Póster
         self.lbl_poster = ctk.CTkLabel(self.shadow_frame, text="")
         self.lbl_poster.pack(padx=10, pady=10)
         
         # Info
-        self.lbl_titulo = ctk.CTkLabel(self.card_frame, text="Cargando...", font=("Helvetica", 22, "bold"), text_color=COLOR_TEXT, wraplength=480, justify="center")
+        self.lbl_titulo = ctk.CTkLabel(self.content_container, text="", font=("Helvetica", 22, "bold"), text_color=COLOR_TEXT, wraplength=480, justify="center")
         self.lbl_titulo.pack(side='top', padx=25, pady=(2, 2))
         
-        self.detalle_frame = ctk.CTkFrame(self.card_frame, fg_color="transparent")
+        self.detalle_frame = ctk.CTkFrame(self.content_container, fg_color="transparent")
         self.detalle_frame.pack(side='top', pady=(8, 8))
-        
         self.lbl_badge_tipo = ctk.CTkLabel(self.detalle_frame, text="", fg_color="#3B0764", text_color="#C084FC", corner_radius=8, font=("Segoe UI", 10, "bold"))
         self.lbl_badge_tipo.pack(side="left", padx=(0, 8), ipadx=6, ipady=1)
-        
         self.lbl_anio = ctk.CTkLabel(self.detalle_frame, text="", text_color="#F1F5F9", font=("Segoe UI", 14, "bold"))
         self.lbl_anio.pack(side="left")
         
-        # Sinopsis (Cambiado a CTkTextbox para evitar recortes y permitir flujo nativo)
-        self.lbl_sinopsis = ctk.CTkTextbox(self.card_frame, font=("Segoe UI", 15, "normal"), text_color="#CBD5E1", 
+        # Sinopsis
+        self.lbl_sinopsis = ctk.CTkTextbox(self.content_container, font=("Segoe UI", 15, "normal"), text_color="#CBD5E1", 
                                            fg_color="transparent", border_width=0, wrap="word", activate_scrollbars=False, height=240)
         self.lbl_sinopsis.pack(side='top', padx=30, pady=(12, 16), fill='both', expand=True)
 
-    def _set_sinopsis(self, texto):
-        self.lbl_sinopsis.configure(state="normal")
-        self.lbl_sinopsis.delete("1.0", "end")
-        self.lbl_sinopsis.insert("1.0", texto)
-        self.lbl_sinopsis.tag_config("center", justify="center")
-        self.lbl_sinopsis.tag_add("center", "1.0", "end")
-        self.lbl_sinopsis.configure(state="disabled")
+        self._set_state_loading()
 
     def _download_poster(self, url, size=(180, 270)):
         if not HAS_PILLOW or not url:
@@ -472,6 +659,33 @@ class QueVeoHoyApp:
         else:
             self.lbl_poster.configure(image=None, text="Error/No Image")
 
+    def _set_state_loading(self):
+        self.content_container.pack_forget()
+        self.msg_frame.pack(expand=True, fill='both')
+        self.lbl_msg_titulo.configure(text="Cargando...")
+        self.lbl_msg_sub.configure(text="Buscando la mejor recomendación...")
+        self.btn_msg_accion.pack_forget()
+
+    def _set_state_error(self, error):
+        self.content_container.pack_forget()
+        self.msg_frame.pack(expand=True, fill='both')
+        self.lbl_msg_titulo.configure(text="Error")
+        self.lbl_msg_sub.configure(text=error)
+        self.btn_msg_accion.configure(text="⏭ Intentar de nuevo")
+        self.btn_msg_accion.pack(side='top', pady=20)
+
+    def _set_state_empty(self):
+        self.content_container.pack_forget()
+        self.msg_frame.pack(expand=True, fill='both')
+        self.lbl_msg_titulo.configure(text="¡No hay nada nuevo para ver!")
+        self.lbl_msg_sub.configure(text="No se encontraron recomendaciones. Intentá más tarde.")
+        self.btn_msg_accion.configure(text="⏭ Intentar de nuevo")
+        self.btn_msg_accion.pack(side='top', pady=20)
+
+    def _set_state_content(self):
+        self.msg_frame.pack_forget()
+        self.content_container.pack(expand=True, fill='both')
+
     def _prefetch_next(self):
         if self._is_prefetching or self._next_rec_cache is not None:
             return
@@ -484,7 +698,13 @@ class QueVeoHoyApp:
                 if not rec:
                     return
                 img = self._download_poster(rec.poster_url)
-                self._next_rec_cache = (rec, img)
+                
+                uc = repository.obtener_usuario_contenido_por_contenido_id(rec.id)
+                progreso = None
+                if rec.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
+                    progreso = repository.obtener_progreso_serie(uc.id)
+                    
+                self._next_rec_cache = (rec, img, uc, progreso)
             except Exception as e:
                 print("Error prefetching:", e)
             finally:
@@ -499,112 +719,177 @@ class QueVeoHoyApp:
         self._rec_request_id += 1
         current_id = self._rec_request_id
         
-        self.btn_visto.configure(state="disabled")
-        self.btn_para_despues.configure(state="disabled")
-        self.btn_siguiente.configure(state="disabled")
-        
+        if hasattr(self, 'btn_visto') and self.btn_visto.winfo_exists():
+            self.btn_visto.configure(state="disabled")
+        if hasattr(self, 'btn_para_despues') and self.btn_para_despues.winfo_exists():
+            self.btn_para_despues.configure(state="disabled")
+        if hasattr(self, 'btn_siguiente') and self.btn_siguiente.winfo_exists():
+            self.btn_siguiente.configure(state="disabled")
+            
         if not self.recomendacion_actual:
             if self._next_rec_cache and not forzar_aleatoria:
-                rec, img = self._next_rec_cache
+                rec, img, uc, progreso = self._next_rec_cache
                 self._next_rec_cache = None
-                
-
-                self._apply_rec(rec, img=img, current_id=current_id)
+                self._apply_rec(rec, img=img, uc=uc, progreso=progreso, current_id=current_id)
                 return
                 
-            self.lbl_titulo.configure(text="Cargando...")
-            self.lbl_badge_tipo.configure(text="")
-            self.lbl_anio.configure(text="")
-            self._set_sinopsis("Buscando la mejor recomendación...")
-            self.lbl_poster.configure(image=None, text="Cargando...")
-            self.btn_pausar.pack_forget()
-            self.btn_abandonar.pack_forget()
-            self.btn_ya_viendo.pack_forget()
-            self.btn_ya_termine.pack_forget()
+            self._set_state_loading()
             
             def _fetch():
                 try:
                     rec = recommendation.recomendacion_de_hoy(forzar_aleatoria=forzar_aleatoria)
                     if current_id != self._rec_request_id: return
                     
-                    img = self._download_poster(rec.poster_url) if rec else None
+                    img = None
+                    uc = None
+                    progreso = None
+                    
+                    if rec:
+                        img = self._download_poster(rec.poster_url)
+                        uc = repository.obtener_usuario_contenido_por_contenido_id(rec.id)
+                        if rec.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
+                            progreso = repository.obtener_progreso_serie(uc.id)
+                            
                     if current_id != self._rec_request_id: return
                     
-                    self.ui_queue.put(lambda r=rec, i=img: self._apply_rec(r, img=i, current_id=current_id))
+                    self.ui_queue.put(lambda r=rec, i=img, u=uc, p=progreso: self._apply_rec(r, img=i, uc=u, progreso=p, current_id=current_id))
                     self.ui_queue.put(self._prefetch_next)
                 except Exception as e:
                     err_msg = str(e)
-                    import traceback
-                    traceback.print_exc()
                     if current_id != self._rec_request_id: return
                     self.ui_queue.put(lambda msg=err_msg: self._apply_rec(None, error=msg, current_id=current_id))
             threading.Thread(target=_fetch, daemon=True).start()
         else:
-            def _fetch_poster():
-                img = self._download_poster(self.recomendacion_actual.poster_url)
-                if current_id != self._rec_request_id: return
-                self.ui_queue.put(lambda: self._apply_rec(self.recomendacion_actual, img=img, current_id=current_id))
-                self.ui_queue.put(self._prefetch_next)
-            threading.Thread(target=_fetch_poster, daemon=True).start()
-            
-    def _apply_rec(self, rec, error=None, img=None, current_id=None):
+            if hasattr(self, 'poster_img_actual') and self.poster_img_actual:
+                def _fetch_state():
+                    uc = repository.obtener_usuario_contenido_por_contenido_id(self.recomendacion_actual.id)
+                    progreso = None
+                    if self.recomendacion_actual.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
+                        progreso = repository.obtener_progreso_serie(uc.id)
+                    if current_id != self._rec_request_id: return
+                    self.ui_queue.put(lambda u=uc, p=progreso: self._apply_rec(self.recomendacion_actual, img=self.poster_img_actual, uc=u, progreso=p, current_id=current_id))
+                threading.Thread(target=_fetch_state, daemon=True).start()
+            else:
+                def _fetch_poster_state():
+                    img = self._download_poster(self.recomendacion_actual.poster_url)
+                    uc = repository.obtener_usuario_contenido_por_contenido_id(self.recomendacion_actual.id)
+                    progreso = None
+                    if self.recomendacion_actual.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
+                        progreso = repository.obtener_progreso_serie(uc.id)
+                    if current_id != self._rec_request_id: return
+                    self.ui_queue.put(lambda u=uc, p=progreso: self._apply_rec(self.recomendacion_actual, img=img, uc=u, progreso=p, current_id=current_id))
+                    self.ui_queue.put(self._prefetch_next)
+                threading.Thread(target=_fetch_poster_state, daemon=True).start()
+
+    def _apply_rec(self, rec, error=None, img=None, uc=None, progreso=None, current_id=None):
         if current_id is not None and current_id != getattr(self, '_rec_request_id', -1):
             return
             
         if error:
-            self.lbl_titulo.configure(text="Error")
-            self._set_sinopsis(error)
-            self.lbl_poster.configure(image=None, text="Error")
-            self.btn_visto.configure(state="normal")
-            self.btn_para_despues.configure(state="normal")
-            self.btn_siguiente.configure(state="normal")
+            self._set_state_error(error)
             return
             
         self.recomendacion_actual = rec
+        self.poster_img_actual = img
         
-        # Persistencia centralizada de la recomendación activa actual
-        try:
-            repository.upsert_historial_recomendacion(rec.id, "RECOMENDADA_HOY")
-        except Exception:
-            pass
+        if rec:
+            def _upsert_historial():
+                try:
+                    repository.upsert_historial_recomendacion(rec.id, "RECOMENDADA_HOY")
+                except Exception:
+                    pass
+            threading.Thread(target=_upsert_historial, daemon=True).start()
+        else:
+            self._set_state_empty()
+            return
+
+        c = rec
         
+        self._set_state_content()
+        
+        self.btn_visto.configure(state="normal")
+        self.btn_para_despues.configure(state="normal")
+        self.btn_siguiente.configure(state="normal")
+        self.btn_pausar.configure(state="normal")
+        self.btn_abandonar.configure(state="normal")
+        self.btn_ya_viendo.configure(state="normal")
+        self.btn_ya_termine.configure(state="normal")
+        self.btn_ajustar_progreso.configure(state="normal")
+        
+        self.btn_para_despues.pack_forget()
+        self.btn_siguiente.pack_forget()
         self.btn_pausar.pack_forget()
         self.btn_abandonar.pack_forget()
         self.btn_ya_viendo.pack_forget()
         self.btn_ya_termine.pack_forget()
-        self.btn_ya_termine.configure(text="✔ Ya la terminé", state="normal")
-        self.btn_ya_viendo.configure(text="▶ Ya la estoy viendo", state="normal")
+        self.btn_ajustar_progreso.pack_forget()
         
-        # Restaurar btn_para_despues si estaba oculto, para mantener orden, se usa before
-        if not self.btn_para_despues.winfo_ismapped():
-            self.btn_para_despues.pack(side='left', padx=5, before=self.btn_siguiente)
-        
-        if not rec:
-            self.lbl_titulo.configure(text="¡No hay nada nuevo para ver!")
-            self.lbl_badge_tipo.configure(text="")
-            self.lbl_anio.configure(text="")
-            self._set_sinopsis("No se encontraron recomendaciones. Intentá más tarde.")
-            self.lbl_poster.configure(image=None, text="No content")
+        if c.tipo == TIPO_SERIE:
+            if uc and uc.estado == ESTADO_EN_PROGRESO:
+                self.btn_visto.pack_forget()
+                self.btn_ajustar_progreso.pack(side='left', padx=5)
+                
+                is_last_episode = False
+                if meta:
+                    import json
+                    temporadas_dict = json.loads(meta['temporadas_json'])
+                    keys = [int(k) for k in temporadas_dict.keys() if int(k) > 0]
+                    if not keys:
+                        keys = [int(k) for k in temporadas_dict.keys()]
+                    if keys:
+                        max_t = max(keys)
+                        max_ep = temporadas_dict.get(str(max_t), 0)
+                        if progreso and progreso.temporada_actual == max_t and progreso.episodio_actual >= max_ep - 1:
+                            is_last_episode = True
+                            
+                if is_last_episode:
+                    self.btn_siguiente.configure(
+                        text="🎉 Terminar Serie", 
+                        fg_color="#059669", 
+                        hover_color="#047857",
+                        text_color="#FFFFFF",
+                        border_color="#10B981",
+                        command=self.on_marcar_visto
+                    )
+                else:
+                    self.btn_siguiente.configure(
+                        text="⏭ Siguiente", 
+                        fg_color="#4C1D95", 
+                        hover_color="#3B0764",
+                        text_color="#DDD6FE",
+                        border_color="#DDD6FE",
+                        command=self.on_siguiente
+                    )
+                    
+                self.btn_siguiente.pack(side='left', padx=5)
+                self.btn_abandonar.pack(side='left', padx=5)
+            else:
+                self.btn_visto.pack(side='top', pady=5)
+                self.btn_visto.configure(text="▶ Empezar Serie")
+                self.btn_para_despues.pack(side='left', padx=5)
+                self.btn_siguiente.configure(
+                    text="⏭ Siguiente", fg_color="#4C1D95", hover_color="#3B0764", text_color="#DDD6FE", border_color="#DDD6FE", command=self.on_siguiente
+                )
+                self.btn_siguiente.pack(side='left', padx=5)
+                if not uc or uc.estado == ESTADO_PARA_DESPUES:
+                    self.btn_ya_viendo.pack(side='left', padx=5)
+                    self.btn_ya_termine.pack(side='left', padx=5)
+        else:
+            self.btn_visto.pack(side='top', pady=5)
+            self.btn_visto.configure(text="✔ Ya la vi")
+            self.btn_para_despues.pack(side='left', padx=5)
+            self.btn_siguiente.configure(
+                text="⏭ Siguiente", fg_color="#4C1D95", hover_color="#3B0764", text_color="#DDD6FE", border_color="#DDD6FE", command=self.on_siguiente
+            )
+            self.btn_siguiente.pack(side='left', padx=5)
+
+        if img:
+            self.lbl_poster.configure(image=img, text="")
+        else:
+            self.lbl_poster.configure(image=None, text="Sin Imagen" if not c.poster_url else "Cargando...")
             
-            self.btn_visto.configure(state="disabled")
-            self.btn_para_despues.configure(state="disabled")
-            self.btn_siguiente.configure(state="disabled")
-            return
-
-        self.btn_visto.configure(state="normal")
-        self.btn_para_despues.configure(state="normal")
-        self.btn_siguiente.configure(state="normal")
-
-        c = rec
-        
-        print(f"DEBUG CONTENIDO: {c.titulo} | Tipo: {c.tipo} | Estreno: {c.fecha_estreno} | Sinopsis: {c.sinopsis[:30] if c.sinopsis else 'VACIA'}")
-        
         self.lbl_titulo.configure(text=c.titulo)
         
-        anio = ""
-        if c.fecha_estreno and len(c.fecha_estreno) >= 4:
-            anio = c.fecha_estreno[:4]
-            
         if c.tipo == TIPO_PELICULA:
             tipo_texto = "PELÍCULA"
         elif c.es_anime:
@@ -613,35 +898,23 @@ class QueVeoHoyApp:
             tipo_texto = "SERIE"
             
         self.lbl_badge_tipo.configure(text=f" {tipo_texto} ")
-            
-        uc = repository.obtener_usuario_contenido_por_contenido_id(c.id)
-        if c.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
-            progreso = repository.obtener_progreso_serie(uc.id)
-            if progreso:
-                anio += f" • T{progreso.temporada_actual} C{progreso.episodio_actual}"
-                
-        self.lbl_anio.configure(text=f"• {anio}" if anio else "")
-        if c.tipo == TIPO_SERIE:
-            if uc and uc.estado == ESTADO_EN_PROGRESO:
-                self.btn_visto.configure(text="✔ Capítulo Visto")
-                self.btn_para_despues.pack_forget()
-                self.btn_pausar.pack(side='left', padx=5, before=self.btn_siguiente)
-                self.btn_abandonar.pack(side='left', padx=5)
-            else:
-                self.btn_visto.configure(text="▶ Empezar Serie")
-                if not uc or uc.estado == ESTADO_PARA_DESPUES:
-                    self.btn_ya_viendo.pack(side='left', padx=5)
-                    self.btn_ya_termine.pack(side='left', padx=5)
-        else:
-            self.btn_visto.configure(text="✔ Ya la vi")
-            
-        self._set_sinopsis(c.sinopsis if c.sinopsis else "Sin sinopsis disponible.")
         
-        if img:
-            self.lbl_poster.configure(image=img, text="")
-        else:
-            self.lbl_poster.configure(image=None, text="Sin Imagen" if not c.poster_url else "Cargando...")
+        anio = ""
+        if c.fecha_estreno and len(c.fecha_estreno) >= 4:
+            anio = c.fecha_estreno[:4]
             
+        if c.tipo == TIPO_SERIE and progreso:
+            anio += f" • T{progreso.temporada_actual} C{progreso.episodio_actual}"
+            
+        self.lbl_anio.configure(text=f"• {anio}" if anio else "")
+        
+        self.lbl_sinopsis.configure(state="normal")
+        self.lbl_sinopsis.delete("1.0", "end")
+        self.lbl_sinopsis.insert("1.0", c.sinopsis if c.sinopsis else "Sin sinopsis disponible.")
+        self.lbl_sinopsis.tag_config("center", justify="center")
+        self.lbl_sinopsis.tag_add("center", "1.0", "end")
+        self.lbl_sinopsis.configure(state="disabled")
+
         self.card_frame.update_idletasks()
 
     def on_marcar_visto(self):
@@ -658,21 +931,22 @@ class QueVeoHoyApp:
                         if progreso:
                             p, u, fin = recommendation.avanzar_progreso_serie(uc.id)
                             if fin:
-                                self.ui_queue.put(lambda: self.show_toast(f"¡Has finalizado {c.titulo}!"))
+                                self.ui_queue.put(lambda: ModalCelebracion(self.root, c.titulo, self.refrescar_final_serie))
                                 self.recomendacion_actual = None
                             else:
                                 self.ui_queue.put(lambda p=p: self.show_toast(f"¡Visto! Ahora estás en T{p.temporada_actual} C{p.episodio_actual}"))
                         else:
-                            recommendation.empezar_serie(uc.id)
+                            p = recommendation.empezar_serie(uc.id)
                             self.ui_queue.put(lambda: self.show_toast("¡Serie empezada! T1 C1"))
                     else:
                         recommendation.marcar_vista_pelicula(uc.id)
                         self.recomendacion_actual = None
                         self.ui_queue.put(lambda: self.show_toast("¡Película marcada como vista!"))
+                    
+                    self.ui_queue.put(self.refrescar_todo)
                 except Exception as e:
                     self.ui_queue.put(lambda: messagebox.showerror("Error", str(e)))
-                
-                self.ui_queue.put(self.refrescar_todo)
+                    self.ui_queue.put(self.refrescar_todo)
 
             threading.Thread(target=_process, daemon=True).start()
 
@@ -703,7 +977,8 @@ class QueVeoHoyApp:
             
             def _process():
                 recommendation.registrar_siguiente(c.id)
-                self.ui_queue.put(lambda: self.refresh_hoy(forzar_aleatoria=was_series_in_progress))
+                self.ui_queue.put(lambda: self.refresh_current_tab(forzar_aleatoria=was_series_in_progress))
+                self.ui_queue.put(self._marcar_tabs_sucias)
                 self.ui_queue.put(self._prefetch_next)
                 
             threading.Thread(target=_process, daemon=True).start()
@@ -730,8 +1005,8 @@ class QueVeoHoyApp:
                 if uc:
                     recommendation.pausar_serie(uc.id)
                 self.ui_queue.put(lambda: self.show_toast("Serie pausada."))
-                self.ui_queue.put(lambda: self.refresh_hoy(forzar_aleatoria=was_series_in_progress))
-                self.ui_queue.put(self.refrescar_todo)
+                self.ui_queue.put(lambda: self.refresh_current_tab(forzar_aleatoria=was_series_in_progress))
+                self.ui_queue.put(self._marcar_tabs_sucias)
                 
             threading.Thread(target=_process, daemon=True).start()
             
@@ -759,12 +1034,31 @@ class QueVeoHoyApp:
             if not uc:
                 uc = recommendation.agregar_a_biblioteca(c.id)
             
-            def _on_success(p):
-                self.show_toast(f"Importada. Vas en T{p.temporada_actual} C{p.episodio_actual}")
-                self.recomendacion_actual = None
-                self.refrescar_todo()
+            def _on_success(p, fin):
+                if fin:
+                    ModalCelebracion(self.root, c.titulo, self.refrescar_final_serie)
+                else:
+                    self.show_toast(f"Importada. Vas en T{p.temporada_actual} C{p.episodio_actual}")
+                    # Remove self.recomendacion_actual = None so it stays on screen
+                    self.refrescar_todo()
                 
             ModalProgresoSerie(self.root, c, uc.id if hasattr(uc, 'id') else uc.id, _on_success)
+            
+    def on_ajustar_progreso(self):
+        if self.recomendacion_actual:
+            c = self.recomendacion_actual
+            uc = repository.obtener_usuario_contenido_por_contenido_id(c.id)
+            if not uc:
+                return
+            
+            def _on_success(p, fin):
+                if fin:
+                    ModalCelebracion(self.root, c.titulo, self.refrescar_final_serie)
+                else:
+                    self.show_toast(f"Progreso ajustado a T{p.temporada_actual} C{p.episodio_actual}")
+                    self.refrescar_todo()
+                
+            ModalAjusteProgreso(self.root, c, uc.id, _on_success)
 
     def on_ya_termine(self):
         if self.recomendacion_actual:
@@ -854,21 +1148,31 @@ class QueVeoHoyApp:
         row_frame.configure(fg_color="#2A2A35")
 
     def refresh_en_progreso(self):
-        for widget in self.scroll_progreso.winfo_children():
-            widget.destroy()
-            
+        self._render_prog_gen = getattr(self, '_render_prog_gen', 0) + 1
+        gen = self._render_prog_gen
+        
         self.selected_prog_row_frame = None
         self.selected_prog_uc_id = None
         
         items = recommendation.obtener_series_activas()
-        for idx, item in enumerate(items):
+        
+        new_container = ctk.CTkFrame(self.scroll_progreso, fg_color="transparent")
+        self._render_progreso_batch(items, 0, new_container, batch_size=15, gen=gen)
+        
+    def _render_progreso_batch(self, items, start_idx, container, batch_size=15, gen=None):
+        if gen is not None and getattr(self, '_render_prog_gen', None) != gen:
+            return
+            
+        end_idx = min(start_idx + batch_size, len(items))
+        for idx in range(start_idx, end_idx):
+            item = items[idx]
             avance = f"T{item.temporada_actual} C{item.episodio_actual}"
             estado_legible = "Pausada" if item.estado == "pausada" else "En progreso"
             tipo_legible = "Anime (Serie)" if item.es_anime else "Serie"
             
             # Crear la fila
-            row_frame = ctk.CTkFrame(self.scroll_progreso, fg_color="transparent", corner_radius=8, cursor="hand2")
-            row_frame.pack(fill='x', padx=5, pady=0)
+            row_frame = ctk.CTkFrame(container, fg_color="transparent", corner_radius=8, cursor="hand2")
+            row_frame.pack(side="top", fill='x', anchor="n", padx=5, pady=0)
             
             row_frame.grid_columnconfigure(0, minsize=430, weight=0)
             row_frame.grid_columnconfigure(1, minsize=110, weight=0)
@@ -907,8 +1211,14 @@ class QueVeoHoyApp:
             avance_frame.grid(row=0, column=1, sticky="nsew", pady=10)
             
             # Formatear el texto de avance en cyan claro y ubicarlo alineado
-            lbl_avance = ctk.CTkLabel(avance_frame, text=avance, font=("Segoe UI", 14, "bold"), text_color="#38BDF8", anchor="center", cursor="hand2")
-            lbl_avance.pack(side="top", anchor="center")
+            avance_row = ctk.CTkFrame(avance_frame, fg_color="transparent")
+            avance_row.pack(side="top", anchor="center")
+            
+            lbl_avance = ctk.CTkLabel(avance_row, text=avance, font=("Segoe UI", 14, "bold"), text_color="#38BDF8", anchor="center", cursor="hand2")
+            lbl_avance.pack(side="left")
+            
+            btn_ajustar = ctk.CTkButton(avance_row, text="✏", width=20, height=20, fg_color="transparent", text_color="#C084FC", hover_color="#3B0764", command=lambda u=item.usuario_contenido_id, c_id=item.contenido_id: self._abrir_ajuste_modal(c_id, u))
+            btn_ajustar.pack(side="left", padx=(5, 0))
             
             porcentaje = 0.0
             meta = repository.obtener_tv_metadata(item.contenido_id)
@@ -935,8 +1245,8 @@ class QueVeoHoyApp:
             
             # Separador sutil
             if idx < len(items) - 1:
-                sep = ctk.CTkFrame(self.scroll_progreso, height=1, fg_color="#232330")
-                sep.pack(fill='x', padx=15)
+                sep = ctk.CTkFrame(container, height=1, fg_color="#232330")
+                sep.pack(side="top", fill='x', anchor="n", padx=15)
             
             # Evento de selección
             def on_click(evt, r=row_frame, u=item.usuario_contenido_id):
@@ -954,6 +1264,27 @@ class QueVeoHoyApp:
             prog_bar.bind("<Button-1>", on_click)
             badge_frame.bind("<Button-1>", on_click)
             badge.bind("<Button-1>", on_click)
+            
+        if end_idx < len(items):
+            self.ui_queue.put(lambda: self._render_progreso_batch(items, end_idx, container, batch_size, gen))
+        else:
+            for widget in self.scroll_progreso.winfo_children():
+                if widget != container:
+                    widget.destroy()
+            container.pack(side="top", fill="x", anchor="n")
+
+    def _abrir_ajuste_modal(self, contenido_id, uc_id):
+        c = repository.obtener_contenido_por_id(contenido_id)
+        if not c: return
+        
+        def _on_success(p, fin):
+            if fin:
+                ModalCelebracion(self.root, c.titulo, self.refrescar_final_serie)
+            else:
+                self.show_toast(f"Progreso ajustado a T{p.temporada_actual} C{p.episodio_actual}")
+                self.refrescar_todo()
+            
+        ModalAjusteProgreso(self.root, c, uc_id, _on_success)
 
     def on_progreso_reanudar(self):
         if not self.selected_prog_uc_id:
@@ -1115,9 +1446,9 @@ class QueVeoHoyApp:
         row_frame.configure(fg_color="#2A2A35")
 
     def refresh_pendientes(self):
-        for widget in self.scroll_pendientes.winfo_children():
-            widget.destroy()
-            
+        self._render_pend_gen = getattr(self, '_render_pend_gen', 0) + 1
+        gen = self._render_pend_gen
+        
         self.selected_pend_row_frame = None
         self.selected_pend_uc_id = None
         self.selected_pend_c_id = None
@@ -1178,6 +1509,7 @@ class QueVeoHoyApp:
         entry_busq = getattr(self, "entry_buscar_pendientes", None)
         texto_busq = entry_busq.get().strip().lower() if entry_busq else ""
         
+        filtered_items = []
         for item in items:
             c = item.contenido
             e = item.usuario_contenido
@@ -1200,15 +1532,28 @@ class QueVeoHoyApp:
                 continue
             elif filtro_estado_val == "Abandonadas" and not is_abandonada:
                 continue
-            elif filtro_estado_val == "Todos":
-                pass # Incluye todo
+                
+            filtered_items.append(item)
+            
+        new_container = ctk.CTkFrame(self.scroll_pendientes, fg_color="transparent")
+        self._render_pendientes_batch(filtered_items, 0, new_container, batch_size=15, gen=gen)
+
+    def _render_pendientes_batch(self, filtered_items, start_idx, container, batch_size=15, gen=None):
+        if gen is not None and getattr(self, '_render_pend_gen', None) != gen:
+            return
+            
+        end_idx = min(start_idx + batch_size, len(filtered_items))
+        for idx in range(start_idx, end_idx):
+            item = filtered_items[idx]
+            c = item.contenido
+            e = item.usuario_contenido
                 
             tipo_legible = self._get_tipo_legible(c)
             estado_legible = ESTADOS_LEGIBLES.get(e.estado, e.estado)
             
             # Crear la fila
-            row_frame = ctk.CTkFrame(self.scroll_pendientes, fg_color="transparent", corner_radius=8, cursor="hand2")
-            row_frame.pack(fill='x', padx=5, pady=2)
+            row_frame = ctk.CTkFrame(container, fg_color="transparent", corner_radius=8, cursor="hand2")
+            row_frame.pack(side="top", fill='x', anchor="n", padx=5, pady=2)
             
             row_frame.grid_columnconfigure(0, minsize=320, weight=0)
             row_frame.grid_columnconfigure(1, minsize=140, weight=0)
@@ -1237,6 +1582,14 @@ class QueVeoHoyApp:
             lbl_tipo.bind("<Button-1>", on_click)
             badge_frame.bind("<Button-1>", on_click)
             badge.bind("<Button-1>", on_click)
+            
+        if end_idx < len(filtered_items):
+            self.root.after(10, lambda: self._render_pendientes_batch(filtered_items, end_idx, container, batch_size, gen))
+        else:
+            for widget in self.scroll_pendientes.winfo_children():
+                if widget != container:
+                    widget.destroy()
+            container.pack(side="top", fill="x", anchor="n")
 
     def on_reanudar(self):
         if not self.selected_pend_uc_id:
@@ -1302,18 +1655,17 @@ class QueVeoHoyApp:
         top_frame = ctk.CTkFrame(self.tab_historial, fg_color="transparent")
         top_frame.pack(side='top', fill='x', padx=10, pady=5)
         
-        lbl_filtro = ctk.CTkLabel(top_frame, text="Filtrar:", text_color="#E0E0E5")
-        lbl_filtro.pack(side='left', padx=(0, 5))
+        self.filtro_tipo_historial = ctk.CTkSegmentedButton(top_frame, values=["Todas (0)", "Películas (0)", "Series (0)", "Anime (0)"],
+                                                            command=lambda _: self.refresh_historial(),
+                                                            corner_radius=14, fg_color="#161420", height=32, font=("Segoe UI", 12, "bold"),
+                                                            selected_color="#581C87", selected_hover_color="#6B21A8",
+                                                            unselected_color="#161420", unselected_hover_color="#2A2640",
+                                                            text_color="#C084FC")
+        self.filtro_tipo_historial.set("Todas (0)")
+        self.filtro_tipo_historial.pack(side='left', padx=5)
         
-        self.filtro_historial = ctk.CTkOptionMenu(top_frame, values=["Todos", "Películas", "Series", "Anime (Todos)", "Anime (Series)", "Anime (Películas)"], command=lambda _: self.refresh_historial(),
-                                                  corner_radius=14, fg_color="#1E1B2E", button_color="#1E1B2E", button_hover_color="#2A2640",
-                                                  dropdown_fg_color="#1E1B2E", dropdown_hover_color="#2A2640",
-                                                  dropdown_text_color="#C084FC", text_color="#C084FC")
-        self.filtro_historial.set("Todos")
-        self.filtro_historial.pack(side='left', padx=5)
-        
-        self.entry_buscar_historial = ctk.CTkEntry(top_frame, placeholder_text="Buscar en historial...", width=300)
-        self.entry_buscar_historial.pack(side='left', padx=15)
+        self.entry_buscar_historial = ctk.CTkEntry(top_frame, placeholder_text="Buscar en historial...", corner_radius=14, height=32)
+        self.entry_buscar_historial.pack(side='left', fill='x', expand=True, padx=5)
         self.entry_buscar_historial.bind("<KeyRelease>", lambda e: self.refresh_historial())
         
         # Container
@@ -1371,9 +1723,9 @@ class QueVeoHoyApp:
         self.on_historial_select()
 
     def refresh_historial(self):
-        for widget in self.scroll_historial.winfo_children():
-            widget.destroy()
-            
+        self._render_hist_gen = getattr(self, '_render_hist_gen', 0) + 1
+        gen = self._render_hist_gen
+        
         self.selected_hist_row_frame = None
         self.selected_hist_c_id = None
         self.selected_hist_tipo = None
@@ -1382,8 +1734,56 @@ class QueVeoHoyApp:
             
         items = repository.obtener_historial_recomendaciones(limit=100)
         search_term = self.entry_buscar_historial.get().lower()
-        filtro = getattr(self, "filtro_historial", None)
-        filtro_val = filtro.get() if filtro else "Todos"
+        
+        # Calcular contadores
+        total_mem = 0
+        pelis_mem = series_mem = anime_mem = 0
+        
+        items_with_content = []
+        for h in items:
+            c = repository.obtener_contenido_por_id(h.contenido_id)
+            if not c:
+                continue
+                
+            items_with_content.append((h, c))
+            total_mem += 1
+            
+            is_anime = getattr(c, 'es_anime', False) or getattr(c, 'tipo', '') == 'ANIME' or getattr(c, 'mal_id', None) is not None
+            if is_anime:
+                anime_mem += 1
+            elif c.tipo.upper() == 'MOVIE':
+                pelis_mem += 1
+            elif c.tipo.upper() == 'TV':
+                series_mem += 1
+                
+        # Actualizar Segmented Button
+        if hasattr(self, "filtro_tipo_historial"):
+            current_raw = self.filtro_tipo_historial.get()
+            self.filtro_tipo_historial.configure(values=[f"Todas ({total_mem})", f"Películas ({pelis_mem})", f"Series ({series_mem})", f"Anime ({anime_mem})"])
+            
+            if "Películas" in current_raw:
+                self.filtro_tipo_historial.set(f"Películas ({pelis_mem})")
+            elif "Series" in current_raw:
+                self.filtro_tipo_historial.set(f"Series ({series_mem})")
+            elif "Anime" in current_raw:
+                self.filtro_tipo_historial.set(f"Anime ({anime_mem})")
+            else:
+                self.filtro_tipo_historial.set(f"Todas ({total_mem})")
+                
+            current_new = self.filtro_tipo_historial.get()
+            for val, btn in self.filtro_tipo_historial._buttons_dict.items():
+                if val == current_new:
+                    btn.configure(text_color="#FFFFFF")
+                else:
+                    btn.configure(text_color="#C084FC")
+                    
+        filtro_tipo_raw = getattr(self, "filtro_tipo_historial", None)
+        filtro_tipo_val_raw = filtro_tipo_raw.get() if filtro_tipo_raw else "Todas"
+        
+        if "Películas" in filtro_tipo_val_raw: filtro_tipo_val = "Películas"
+        elif "Series" in filtro_tipo_val_raw: filtro_tipo_val = "Series"
+        elif "Anime" in filtro_tipo_val_raw: filtro_tipo_val = "Anime (Todos)"
+        else: filtro_tipo_val = "Todos"
         
         evento_map = {
             "PARA_DESPUES": "Para después",
@@ -1394,25 +1794,37 @@ class QueVeoHoyApp:
             "TERMINADA": "Terminada"
         }
         
-        for h in items:
-            fecha_str = str(h.fecha)[:10] if h.fecha else ""
-            c = repository.obtener_contenido_por_id(h.contenido_id)
-            
-            if c and not self._cumple_filtro(c, filtro_val):
+        filtered_items = []
+        for h, c in items_with_content:
+            if not self._cumple_filtro(c, filtro_tipo_val):
                 continue
                 
             titulo = c.titulo if c else "Desconocido"
+            if search_term and search_term not in titulo.lower():
+                continue
+                
+            filtered_items.append((h, c, titulo))
+            
+        new_container = ctk.CTkFrame(self.scroll_historial, fg_color="transparent")
+        self._render_historial_batch(filtered_items, 0, evento_map, new_container, batch_size=15, gen=gen)
+
+    def _render_historial_batch(self, filtered_items, start_idx, evento_map, container, batch_size=15, gen=None):
+        if gen is not None and getattr(self, '_render_hist_gen', None) != gen:
+            return
+            
+        end_idx = min(start_idx + batch_size, len(filtered_items))
+        for idx in range(start_idx, end_idx):
+            h, c, titulo = filtered_items[idx]
+            
+            fecha_str = str(h.fecha)[:10] if h.fecha else ""
             tipo = self._get_tipo_legible(c)
             
             raw_evento = h.accion if h.accion else ""
             evento = evento_map.get(raw_evento, raw_evento.replace("_", " ").capitalize())
             
-            if search_term and search_term not in titulo.lower():
-                continue
-                
             # Crear la fila
-            row_frame = ctk.CTkFrame(self.scroll_historial, fg_color="transparent", corner_radius=8, cursor="hand2")
-            row_frame.pack(fill='x', padx=5, pady=2)
+            row_frame = ctk.CTkFrame(container, fg_color="transparent", corner_radius=8, cursor="hand2")
+            row_frame.pack(side="top", fill='x', anchor="n", padx=5, pady=2)
             
             row_frame.grid_columnconfigure(0, minsize=100)
             row_frame.grid_columnconfigure(1, weight=1)
@@ -1445,7 +1857,14 @@ class QueVeoHoyApp:
             badge_frame.bind("<Button-1>", on_click)
             badge.bind("<Button-1>", on_click)
             
-        self.on_historial_select()
+        if end_idx < len(filtered_items):
+            self.root.after(10, lambda: self._render_historial_batch(filtered_items, end_idx, evento_map, container, batch_size, gen))
+        else:
+            for widget in self.scroll_historial.winfo_children():
+                if widget != container:
+                    widget.destroy()
+            container.pack(side="top", fill="x", anchor="n")
+            self.on_historial_select()
 
     def on_historial_select(self):
         if not self.selected_hist_c_id:
@@ -1527,12 +1946,11 @@ class QueVeoHoyApp:
     def _mostrar_resultados_busqueda(self, resultados):
         self.resultados_busqueda = resultados
         
-        for w in self.scroll_buscar.winfo_children():
-            w.destroy()
+        new_container = ctk.CTkFrame(self.scroll_buscar, fg_color="transparent")
             
         for idx, c in enumerate(resultados):
-            card = ctk.CTkFrame(self.scroll_buscar, fg_color="#181524", corner_radius=10, border_width=1, border_color="#262335")
-            card.pack(fill='x', padx=10, pady=5)
+            card = ctk.CTkFrame(new_container, fg_color="#181524", corner_radius=10, border_width=1, border_color="#262335")
+            card.pack(side="top", fill='x', anchor="n", padx=10, pady=5)
             
             card.grid_columnconfigure(0, minsize=60) # Poster
             card.grid_columnconfigure(1, weight=1)   # Titulo + Subtitulo
@@ -1543,9 +1961,12 @@ class QueVeoHoyApp:
             
             if c.poster_url:
                 def _load_img(url, lbl):
-                    img = self._download_poster(url, size=(60, 90))
-                    if img:
-                        self.ui_queue.put(lambda l=lbl, i=img: l.configure(image=i, text="") if l.winfo_exists() else None)
+                    try:
+                        img = self._download_poster(url, size=(60, 90))
+                        if img:
+                            self.ui_queue.put(lambda l=lbl, i=img: l.configure(image=i, text="") if l.winfo_exists() else None)
+                    except Exception as e:
+                        print(f"Error en _load_img de busqueda: {e}")
                 threading.Thread(target=_load_img, args=(c.poster_url, poster_lbl), daemon=True).start()
             
             text_container = ctk.CTkFrame(card, fg_color="transparent")
@@ -1597,6 +2018,11 @@ class QueVeoHoyApp:
                                              text_color="#C084FC", dropdown_fg_color="#181524", dropdown_hover_color="#3B185F", dropdown_text_color="#F1F5F9", font=("Segoe UI", 12))
                 opt_menu.set("+ Añadir a mi lista...")
                 opt_menu.pack(side="right")
+                
+        for w in self.scroll_buscar.winfo_children():
+            if w != new_container:
+                w.destroy()
+        new_container.pack(side="top", fill="x", anchor="n")
 
     def on_buscar_select(self, event):
         selected = self.tree_buscar.selection()

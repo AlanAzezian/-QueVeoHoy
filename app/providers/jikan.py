@@ -6,7 +6,7 @@ import random
 from typing import List
 from datetime import datetime
 
-from app.models import Contenido, TIPO_SERIE
+from app.models import Contenido, TIPO_SERIE, TIPO_PELICULA
 from app.providers.base import ContentProvider
 
 BASE_URL = "https://api.jikan.moe/v4"
@@ -44,14 +44,15 @@ class JikanProvider(ContentProvider):
             images = item.get("images", {}).get("jpg", {})
             if "large_image_url" in images:
                 poster_url = images["large_image_url"]
-            elif "image_url" in images:
-                poster_url = images["image_url"]
+            # Tipo (Movie vs TV)
+            item_type = item.get("type", "TV")
+            tipo_contenido = TIPO_PELICULA if item_type == "Movie" else TIPO_SERIE
                 
             contenido = Contenido(
                 id=None,
                 tmdb_id=None, # Mapear cruzado en el futuro si se necesita
                 mal_id=item.get("mal_id"),
-                tipo=TIPO_SERIE,
+                tipo=tipo_contenido,
                 es_anime=True,
                 titulo=titulo or "Sin Título",
                 titulo_original=titulo_original,
@@ -69,15 +70,19 @@ class JikanProvider(ContentProvider):
     def obtener_tendencias_series(self) -> List[Contenido]:
         return []
 
-    def obtener_tendencias_anime(self) -> List[Contenido]:
+    def obtener_tendencias_anime(self, tipo: str = None) -> List[Contenido]:
         # Limitamos a las primeras 100 páginas de popularidad (top 2500 animes)
         page = random.randint(1, 100)
-        data = self._make_request("/anime", {
+        params = {
             "order_by": "popularity",
             "sort": "asc",
             "sfw": "true",
             "page": str(page)
-        })
+        }
+        if tipo:
+            params["type"] = tipo
+            
+        data = self._make_request("/anime", params)
         return self._parse_results(data.get("data", []))
 
     def obtener_detalle_completo(self, content_id: int, tipo: str) -> dict:
