@@ -13,6 +13,9 @@ BASE_URL = "https://api.jikan.moe/v4"
 
 class JikanProvider(ContentProvider):
     def _make_request(self, endpoint: str, params: dict = None) -> dict:
+        import time
+        time.sleep(0.35)
+        
         if params is None:
             params = {}
             
@@ -21,7 +24,7 @@ class JikanProvider(ContentProvider):
         
         try:
             req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with urllib.request.urlopen(req, timeout=5.0) as response:
                 return json.loads(response.read().decode('utf-8'))
         except Exception as e:
             print(f"Jikan Error en {endpoint}: {e}")

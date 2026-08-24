@@ -258,6 +258,26 @@ def empezar_serie(usuario_contenido_id: int) -> ProgresoSerie:
     
     return progreso
 
+def empezar_pelicula(usuario_contenido_id: int) -> UsuarioContenido:
+    """
+    Inicia una película nueva ("Empezar Película"). Transiciona PENDIENTE -> EN_PROGRESO
+    y guarda la fecha de inicio.
+
+    Lanza ValueError si el usuario_contenido no existe o si el contenido asociado
+    no es de tipo MOVIE.
+    """
+    usuario_contenido = repository.obtener_usuario_contenido_por_id(usuario_contenido_id)
+    if not usuario_contenido:
+        raise ValueError(f"No se encontró el UsuarioContenido con ID {usuario_contenido_id}")
+        
+    contenido = repository.obtener_contenido_por_id(usuario_contenido.contenido_id)
+    if not contenido or contenido.tipo != "MOVIE":
+        raise ValueError("empezar_pelicula es solo para películas")
+        
+    uc = cambiar_estado(usuario_contenido_id, EN_PROGRESO)
+    repository.upsert_historial_recomendacion(contenido.id, "EMPEZAR_EN_PROGRESO")
+    return uc
+
 def importar_progreso_serie(
     usuario_contenido_id: int,
     temporada_actual: int,
@@ -646,7 +666,7 @@ def obtener_biblioteca_inactiva() -> list[ElementoBiblioteca]:
             res.append(ElementoBiblioteca(usuario_contenido=uc, contenido=c))
     return res
 
-def recomendacion_de_hoy(ignorar_id: int = None, es_prefetch: bool = False, forzar_aleatoria: bool = False) -> Optional[Contenido]:
+def recomendacion_de_hoy(ignorar_id: int = None, es_prefetch: bool = False, forzar_aleatoria: bool = False, categoria: str = None) -> Optional[Contenido]:
     """
     Motor de recomendación diario.
     1. Si hay series en progreso (y no se forzó aleatoria), devuelve la primera (a menos que sea prefetch).
@@ -658,11 +678,9 @@ def recomendacion_de_hoy(ignorar_id: int = None, es_prefetch: bool = False, forz
         if activa and activa.id != ignorar_id:
             return activa
 
-    if not forzar_aleatoria:
-        en_progreso = obtener_series_en_progreso()
+    if not forzar_aleatoria and not es_prefetch:
+        en_progreso = repository.obtener_usuario_contenido_en_progreso_all()
         if en_progreso:
-            if es_prefetch:
-                return None
             c = repository.obtener_contenido_por_id(en_progreso[0].contenido_id)
             if c:
                 return c
@@ -689,16 +707,33 @@ def recomendacion_de_hoy(ignorar_id: int = None, es_prefetch: bool = False, forz
     jikan_provider = JikanProvider()
     bolsa = []
     
-    # 10 de cada uno
-    peliculas = tmdb_provider.obtener_tendencias_peliculas()[:10]
-    series = tmdb_provider.obtener_tendencias_series()[:10]
-    anime_series = jikan_provider.obtener_tendencias_anime(tipo="tv")[:10]
-    anime_movies = jikan_provider.obtener_tendencias_anime(tipo="movie")[:10]
-    
-    bolsa.extend(peliculas)
-    bolsa.extend(series)
-    bolsa.extend(anime_series)
-    bolsa.extend(anime_movies)
+    if categoria == "pelicula":
+        bolsa = tmdb_provider.obtener_tendencias_peliculas()[:10]
+    elif categoria == "serie":
+        bolsa = tmdb_provider.obtener_tendencias_series()[:10]
+    elif categoria == "anime_serie":
+        bolsa = jikan_provider.obtener_tendencias_anime(tipo="tv")[:10]
+        if not bolsa:
+            bolsa = tmdb_provider.obtener_tendencias_anime(tipo="tv")[:10]
+    elif categoria == "anime_pelicula":
+        bolsa = jikan_provider.obtener_tendencias_anime(tipo="movie")[:10]
+        if not bolsa:
+            bolsa = tmdb_provider.obtener_tendencias_anime(tipo="movie")[:10]
+    else:
+        # Default fallback
+        peliculas = tmdb_provider.obtener_tendencias_peliculas()[:10]
+        series = tmdb_provider.obtener_tendencias_series()[:10]
+        anime_series = jikan_provider.obtener_tendencias_anime(tipo="tv")[:10]
+        if not anime_series:
+            anime_series = tmdb_provider.obtener_tendencias_anime(tipo="tv")[:10]
+        anime_movies = jikan_provider.obtener_tendencias_anime(tipo="movie")[:10]
+        if not anime_movies:
+            anime_movies = tmdb_provider.obtener_tendencias_anime(tipo="movie")[:10]
+        
+        bolsa.extend(peliculas)
+        bolsa.extend(series)
+        bolsa.extend(anime_series)
+        bolsa.extend(anime_movies)
     
     candidatos_validos = []
     for cont in bolsa:
@@ -720,6 +755,8 @@ def recomendacion_de_hoy(ignorar_id: int = None, es_prefetch: bool = False, forz
         candidatos_validos.append(cont)
         
     if not candidatos_validos:
+        if bolsa:
+            return random.choice(bolsa)
         return None
         
     elegido = random.choice(candidatos_validos)

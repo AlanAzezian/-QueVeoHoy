@@ -493,6 +493,30 @@ def obtener_usuario_contenido_en_progreso_tv() -> list[UsuarioContenido]:
         ))
     return res
 
+def obtener_usuario_contenido_en_progreso_all() -> list[UsuarioContenido]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT uc.id, uc.contenido_id, uc.estado, uc.fecha_agregado, uc.fecha_inicio, uc.fecha_finalizacion
+        FROM usuario_contenido uc
+        WHERE uc.estado = 'en_progreso'
+        ORDER BY uc.fecha_inicio DESC, uc.id DESC
+    ''')
+    rows = cursor.fetchall()
+    conn.close()
+
+    res = []
+    for row in rows:
+        res.append(UsuarioContenido(
+            id=row['id'],
+            contenido_id=row['contenido_id'],
+            estado=row['estado'],
+            fecha_agregado=row['fecha_agregado'],
+            fecha_inicio=row['fecha_inicio'],
+            fecha_finalizacion=row['fecha_finalizacion']
+        ))
+    return res
+
 def obtener_usuario_contenido_en_progreso_y_pausadas_tv() -> list[UsuarioContenido]:
     conn = get_connection()
     cursor = conn.cursor()

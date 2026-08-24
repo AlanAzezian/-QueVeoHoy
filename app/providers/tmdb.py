@@ -24,7 +24,7 @@ class TMDBProvider(ContentProvider):
         
         try:
             req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with urllib.request.urlopen(req, timeout=3.0) as response:
                 return json.loads(response.read().decode('utf-8'))
         except Exception as e:
             print(f"TMDB Error en {endpoint}: {e}")
@@ -84,9 +84,16 @@ class TMDBProvider(ContentProvider):
         })
         return self._parse_results(data.get("results", []), TIPO_SERIE)
 
-    def obtener_tendencias_anime(self) -> List[Contenido]:
-        # Ya no usamos TMDB para anime, devolvemos lista vacía
-        return []
+    def obtener_tendencias_anime(self, tipo: str = "tv") -> List[Contenido]:
+        page = random.randint(1, 5)
+        endpoint = "/discover/tv" if tipo == "tv" else "/discover/movie"
+        data = self._make_request(endpoint, {
+            "with_genres": "16",
+            "with_origin_country": "JP",
+            "sort_by": "popularity.desc",
+            "page": str(page)
+        })
+        return self._parse_results(data.get("results", []), TIPO_SERIE if tipo == "tv" else TIPO_PELICULA, force_es_anime=True)
 
     def obtener_temporadas(self, tv_id: int) -> dict:
         data = self._make_request(f"/tv/{tv_id}")
