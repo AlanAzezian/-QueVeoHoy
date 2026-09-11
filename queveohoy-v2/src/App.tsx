@@ -35,6 +35,8 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasErr
   }
 }
 
+const ALL_GENRES = ["Acción", "Aventura", "Animación", "Comedia", "Crimen", "Documental", "Drama", "Familia", "Fantasía", "Historia", "Terror", "Música", "Misterio", "Romance", "Ciencia ficción", "Suspense", "Bélica", "Western"];
+
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("hoy");
   const [recomendacion, setRecomendacion] = useState<any>(null);
@@ -43,9 +45,32 @@ function App() {
 
   const [history, setHistory] = useState<any[]>([]);
   const [forwardHistory, setForwardHistory] = useState<any[]>([]);
+  
+  const [isGenreOpen, setIsGenreOpen] = useState(false);
+  const [selectedGeneros, setSelectedGeneros] = useState<string[]>([]);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   // Prevent double fetch in Strict Mode
   const isFetchingRef = useRef(false);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
+        setIsGenreOpen(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsGenreOpen(false);
+    };
+    if (isGenreOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleEscape);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isGenreOpen]);
 
   useEffect(() => {
     if (toastMessage) {
@@ -54,17 +79,50 @@ function App() {
     }
   }, [toastMessage]);
 
-  const loadRecommendation = async () => {
-    if (isFetchingRef.current) return;
+  const loadRecommendation = async (retryCount = 0) => {
+    if (isFetchingRef.current && retryCount === 0) return;
     isFetchingRef.current = true;
-    setLoading(true);
+    if (retryCount === 0) setLoading(true);
+    
     try {
-      const rec = await invoke("get_recommendation");
+      let rec = await invoke("get_recommendation");
+      
+      // Lógica de filtrado por género
+      let localRetry = retryCount;
+      while (rec && selectedGeneros.length > 0 && localRetry < 40) {
+        let recGeneros: string[] = [];
+        const genData = (rec as any).contenido?.generos;
+        if (typeof genData === 'string') {
+          try {
+            const parsed = JSON.parse(genData);
+            recGeneros = Array.isArray(parsed) ? parsed : [];
+          } catch {
+            recGeneros = genData.split(',').map((s: string) => s.trim());
+          }
+        }
+        
+        const hasMatch = selectedGeneros.some(g => recGeneros.includes(g));
+        if (hasMatch) break;
+        
+        // No match: omit from session but don't log in bitacora
+        await invoke("mark_as_omitted", { 
+          id: (rec as any).contenido.id, 
+          registrarEnBitacora: false 
+        }).catch(() => {});
+        
+        rec = await invoke("get_recommendation");
+        localRetry++;
+      }
+      
+      if (localRetry >= 40 || (!rec && selectedGeneros.length > 0)) {
+         setToastMessage("No se encontraron obras con esos géneros en el catálogo");
+      }
+      
       setRecomendacion(rec);
     } catch (error) {
       console.error("Error loading recommendation:", error);
     } finally {
-      setLoading(false);
+      if (retryCount === 0) setLoading(false);
       isFetchingRef.current = false;
     }
   };
@@ -73,7 +131,7 @@ function App() {
     if (activeTab === "hoy" && !recomendacion && !isFetchingRef.current) {
       loadRecommendation();
     }
-  }, [activeTab, recomendacion]);
+  }, [activeTab, recomendacion, selectedGeneros]); // Added selectedGeneros
 
   // Polling for fresh content when catalogo_offline is empty
   useEffect(() => {
@@ -93,14 +151,14 @@ function App() {
   const handleSiguiente = async (registrarEnBitacora: boolean = true) => {
     if (recomendacion?.contenido) {
       try {
-        if (registrarEnBitacora) {
-           await invoke("mark_as_omitted", { 
-             id: recomendacion.contenido.id, 
-             registrarEnBitacora 
-           }).catch(e => console.error("Error skipping:", e));
-        }
+        await invoke("mark_as_omitted", { 
+          id: recomendacion.contenido.id, 
+          registrarEnBitacora 
+        }).catch(e => console.error("Error skipping:", e));
         
-        setHistory(prev => [...prev, recomendacion]);
+        if (registrarEnBitacora) {
+          setHistory(prev => [...prev, recomendacion]);
+        }
         
         if (forwardHistory.length > 0) {
           const nextList = [...forwardHistory];
@@ -186,7 +244,50 @@ function App() {
             label="Buscar" 
           />
         </nav>
-        <div className="w-1/3 flex justify-end">
+        <div className="w-1/3 flex justify-end gap-2 items-center">
+          {activeTab === "hoy" && (
+            <div className="relative" ref={popoverRef}>
+              <button
+                onClick={() => setIsGenreOpen(!isGenreOpen)}
+                className={`text-xs border border-white/10 rounded-full px-3 py-1.5 transition-all flex items-center gap-1.5 cursor-pointer relative z-50 ${selectedGeneros.length > 0 ? 'border-purple-500/40 text-purple-200 bg-purple-500/10' : 'bg-white/5 hover:bg-white/10 text-neutral-300'}`}
+              >
+                🎭 Géneros {selectedGeneros.length > 0 ? `(${selectedGeneros.length})` : ''} ▾
+              </button>
+              
+              {isGenreOpen && (
+                <div className="absolute right-0 top-full mt-2 w-72 p-3 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl shadow-black/80 z-50 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-150">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">Filtrar por género</span>
+                    {selectedGeneros.length > 0 && (
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setSelectedGeneros([]); }}
+                        className="text-[10px] text-purple-400 hover:text-purple-300 cursor-pointer"
+                      >
+                        Limpiar
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto pr-1">
+                    {ALL_GENRES.map(g => (
+                      <button
+                        key={g}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedGeneros(prev => prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g]);
+                        }}
+                        className={selectedGeneros.includes(g) 
+                          ? 'text-[11px] px-2 py-1 rounded-lg bg-purple-600/30 text-purple-200 border border-purple-500/50 font-medium cursor-pointer transition-all'
+                          : 'text-[11px] px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-neutral-400 border border-white/5 cursor-pointer transition-colors'
+                        }
+                      >
+                        {g}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {activeTab === "hoy" && recomendacion?.estado === "en_progreso" && (
             <button 
               onClick={async () => {
