@@ -131,6 +131,14 @@ fn abandonar_multiples(ids: Vec<i64>) -> Result<(), String> {
     })
 }
 
+#[tauri::command]
+fn get_generos_disponibles_hoy() -> Result<Vec<models::GeneroConteo>, String> {
+    db::get_generos_disponibles_hoy().map_err(|e| {
+        eprintln!("DB ERROR (get_generos_disponibles_hoy): {:?}", e);
+        e.to_string()
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if let Err(e) = db::init_db() {
@@ -163,7 +171,8 @@ pub fn run() {
             fetch_metadata_temporadas,
             backfill_metadata_cache,
             omitir_todos_en_progreso,
-            abandonar_multiples
+            abandonar_multiples,
+            get_generos_disponibles_hoy
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

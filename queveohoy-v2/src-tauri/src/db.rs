@@ -851,3 +851,47 @@ pub fn get_metadata_json(contenido_id: i64) -> Result<Option<String>> {
     ).unwrap_or(None);
     Ok(json_str)
 }
+
+pub fn get_generos_disponibles_hoy() -> Result<Vec<crate::models::GeneroConteo>> {
+    let conn = get_connection()?;
+    let mut stmt = conn.prepare(
+        "SELECT c.generos 
+         FROM catalogo_offline co
+         JOIN contenido c ON co.contenido_id = c.id
+         LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
+         WHERE uc.estado IS NULL AND c.generos IS NOT NULL AND c.generos != ''"
+    )?;
+
+    let mut rows = stmt.query([])?;
+    let mut genre_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    while let Some(row) = rows.next()? {
+        let generos_str: String = row.get(0)?;
+        
+        // Tratar de parsear como JSON array
+        if let Ok(parsed) = serde_json::from_str::<Vec<String>>(&generos_str) {
+            for g in parsed {
+                *genre_counts.entry(g).or_insert(0) += 1;
+            }
+        } else {
+            // Fallback a separador por comas
+            for g in generos_str.split(',') {
+                let g = g.trim();
+                if !g.is_empty() {
+                    *genre_counts.entry(g.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    let mut result: Vec<crate::models::GeneroConteo> = genre_counts
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(nombre, count)| crate::models::GeneroConteo { nombre, count })
+        .collect();
+
+    // Ordenar de mayor a menor cantidad
+    result.sort_by(|a, b| b.count.cmp(&a.count));
+
+    Ok(result)
+}

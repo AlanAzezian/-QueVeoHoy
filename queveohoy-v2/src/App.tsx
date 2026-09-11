@@ -34,8 +34,10 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasErr
     return this.props.children;
   }
 }
-
-const ALL_GENRES = ["Acción", "Aventura", "Animación", "Comedia", "Crimen", "Documental", "Drama", "Familia", "Fantasía", "Historia", "Terror", "Música", "Misterio", "Romance", "Ciencia ficción", "Suspense", "Bélica", "Western"];
+interface GeneroConteo {
+  nombre: string;
+  count: number;
+}
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("hoy");
@@ -48,10 +50,17 @@ function App() {
   
   const [isGenreOpen, setIsGenreOpen] = useState(false);
   const [selectedGeneros, setSelectedGeneros] = useState<string[]>([]);
+  const [availableGenres, setAvailableGenres] = useState<GeneroConteo[]>([]);
   const popoverRef = useRef<HTMLDivElement>(null);
 
   // Prevent double fetch in Strict Mode
   const isFetchingRef = useRef(false);
+
+  useEffect(() => {
+    invoke<GeneroConteo[]>("get_generos_disponibles_hoy")
+      .then(genres => setAvailableGenres(genres))
+      .catch(e => console.error("Error fetching available genres", e));
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -268,19 +277,19 @@ function App() {
                     )}
                   </div>
                   <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto pr-1">
-                    {ALL_GENRES.map(g => (
+                    {availableGenres.map(g => (
                       <button
-                        key={g}
+                        key={g.nombre}
                         onClick={(e) => {
                           e.stopPropagation();
-                          setSelectedGeneros(prev => prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g]);
+                          setSelectedGeneros(prev => prev.includes(g.nombre) ? prev.filter(x => x !== g.nombre) : [...prev, g.nombre]);
                         }}
-                        className={selectedGeneros.includes(g) 
+                        className={selectedGeneros.includes(g.nombre) 
                           ? 'text-[11px] px-2 py-1 rounded-lg bg-purple-600/30 text-purple-200 border border-purple-500/50 font-medium cursor-pointer transition-all'
                           : 'text-[11px] px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-neutral-400 border border-white/5 cursor-pointer transition-colors'
                         }
                       >
-                        {g}
+                        {g.nombre} ({g.count})
                       </button>
                     ))}
                   </div>

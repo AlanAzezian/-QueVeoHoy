@@ -52,3 +52,9 @@ pub struct AvanceResultado {
     pub episodio: i64,
     pub terminada: bool,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GeneroConteo {
+    pub nombre: String,
+    pub count: usize,
+}
