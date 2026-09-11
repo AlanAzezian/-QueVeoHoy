@@ -38,7 +38,7 @@ class TMDBProvider(ContentProvider):
             date_str = item.get("release_date") if tipo == TIPO_PELICULA else item.get("first_air_date")
             
             poster_path = item.get("poster_path")
-            poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else None
+            poster_url = f"https://image.tmdb.org/t/p/w342{poster_path}" if poster_path else None
             
             # TMDB Anime Detection
             genre_ids = item.get("genre_ids", [])
@@ -139,7 +139,7 @@ class TMDBProvider(ContentProvider):
             date_str = item.get("release_date") if tipo == TIPO_PELICULA else item.get("first_air_date")
             
             poster_path = item.get("poster_path")
-            poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else None
+            poster_url = f"https://image.tmdb.org/t/p/w342{poster_path}" if poster_path else None
             
             contenido = Contenido(
                 id=None,

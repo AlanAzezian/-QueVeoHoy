@@ -1,0 +1,13 @@
+handleAnteriorLocal : undefined}
+
+                className={`flex flex-col items-center shrink-0 origin-right transition-opacity duration-300 ${
+
+                  showSlotMachine ? 'opacity-0 pointer-events-none' : 'opacity-40 hover:opacity-80 cursor-pointer'
+
+                }`}
+
+                style={{ transform: "rotateY(14deg) translateZ(-40px) scale(0.82)" }}
+
+              >
+
+            

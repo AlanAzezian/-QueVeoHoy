@@ -403,8 +403,8 @@ class QueVeoHoyApp:
         
         self.poster_cache = {}
         self.recomendacion_actual = None
-        self._prefetch_pool = {}
-        self._is_prefetching = False
+        self._ignorar_en_progreso_en_sesion = False
+        self._series_en_progreso_omitidas = set()
 
         self.setup_tab_hoy()
         self.setup_tab_en_progreso()
@@ -422,6 +422,7 @@ class QueVeoHoyApp:
         self.root.after(100, self.iniciar_pre_renderizado)
         
     def iniciar_pre_renderizado(self):
+        recommendation.iniciar_worker_catalogo()
         self.refresh_hoy()
         self.root.after(100, self.refresh_en_progreso)
         self.root.after(300, self.refresh_pendientes)
@@ -477,6 +478,19 @@ class QueVeoHoyApp:
             else:
                 return c.tipo
 
+    def _truncar_texto(self, texto, font_tuple, max_width):
+        if not texto: return ""
+        font = ctk.CTkFont(family=font_tuple[0], size=font_tuple[1], weight=font_tuple[2] if len(font_tuple)>2 else "normal")
+        if font.measure(texto) <= max_width:
+            return texto
+        
+        # Búsqueda regresiva para truncar
+        for i in range(len(texto), 0, -1):
+            truncado = texto[:i] + "..."
+            if font.measure(truncado) <= max_width:
+                return truncado
+        return "..."
+
     def show_toast(self, message, parent=None):
         if parent is None:
             parent = self.card_frame
@@ -510,7 +524,14 @@ class QueVeoHoyApp:
             self.nav_buttons[self.current_tab].configure(fg_color="transparent", border_width=0, text_color="#94A3B8")
             
         self.current_tab = tab_name
-        self.tabs[tab_name].tkraise()
+        
+        for name, frame in self.tabs.items():
+            if name == tab_name:
+                frame.grid(row=0, column=0, sticky="nsew")
+                frame.tkraise()
+            else:
+                frame.grid_remove()
+                
         self.nav_buttons[tab_name].configure(fg_color="#3B185F", border_width=1, border_color="#7C3AED", text_color="#FFFFFF")
 
     def refrescar_todo(self):
@@ -604,7 +625,7 @@ class QueVeoHoyApp:
         self.shadow_frame = ctk.CTkFrame(self.content_container, fg_color="transparent", 
                                          corner_radius=16, border_width=3, border_color="#A855F7")
         self.shadow_frame.pack(side='top', pady=(10, 2))
-        self.lbl_poster = ctk.CTkLabel(self.shadow_frame, text="")
+        self.lbl_poster = ctk.CTkLabel(self.shadow_frame, text="", width=190, height=285)
         self.lbl_poster.pack(padx=10, pady=10)
         
         # Info
@@ -625,44 +646,46 @@ class QueVeoHoyApp:
 
         self._set_state_loading()
 
-    def _download_poster(self, url, size=(180, 270)):
-        if not HAS_PILLOW or not url:
+    def _download_poster(self, contenido_id, poster_url=None, size=(190, 285)):
+        if not HAS_PILLOW or not contenido_id:
             return None
             
-        cache_key = (url, size)
+        cache_key = contenido_id
         if cache_key in self.poster_cache:
             return self.poster_cache[cache_key]
             
         try:
-            import hashlib
-            import urllib.parse
             import os
-            cache_dir = os.path.join(".", "cache", "posters")
-            os.makedirs(cache_dir, exist_ok=True)
+            import urllib.request
+            from pathlib import Path
+            cache_dir = Path.home() / '.queveohoy' / 'cache_posters'
+            file_path = cache_dir / f"{contenido_id}.jpg"
             
-            url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
-            ext = os.path.splitext(urllib.parse.urlparse(url).path)[1]
-            if not ext: ext = ".jpg"
-            file_path = os.path.join(cache_dir, f"{url_hash}{ext}")
-            
-            if os.path.exists(file_path):
-                im = Image.open(file_path)
-            else:
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                raw_data = urllib.request.urlopen(req, timeout=5).read()
-                im = Image.open(io.BytesIO(raw_data))
-                with open(file_path, "wb") as f:
-                    f.write(raw_data)
-            
-            img = ctk.CTkImage(light_image=im, dark_image=im, size=size)
-            self.poster_cache[cache_key] = img
-            return img
-        except Exception as e:
-            print("Error loading image:", e)
-            return None
+            if not file_path.exists() and poster_url:
+                try:
+                    req = urllib.request.Request(poster_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, timeout=5.0) as response:
+                        with open(file_path, 'wb') as f:
+                            f.write(response.read())
+                except Exception as e:
+                    print(f"Error fallback download {poster_url}: {e}")
 
-    def _load_poster(self, url):
-        img = self._download_poster(url)
+            if file_path.exists():
+                im = Image.open(str(file_path))
+                img = ctk.CTkImage(light_image=im, dark_image=im, size=size)
+                
+                if len(self.poster_cache) >= 20:
+                    oldest_key = next(iter(self.poster_cache))
+                    del self.poster_cache[oldest_key]
+                    
+                self.poster_cache[cache_key] = img
+                return img
+        except Exception as e:
+            print("Error loading image from disk:", e)
+        return None
+
+    def _load_poster(self, contenido_id, poster_url=None):
+        img = self._download_poster(contenido_id, poster_url)
         if img:
             self.lbl_poster.configure(image=img, text="")
         else:
@@ -695,39 +718,6 @@ class QueVeoHoyApp:
         self.msg_frame.pack_forget()
         self.content_container.pack(expand=True, fill='both')
 
-    def _prefetch_next(self):
-        if not hasattr(self, '_prefetch_pool'):
-            self._prefetch_pool = {}
-        if self._is_prefetching:
-            return
-            
-        # Limit pool to 4 items max
-        missing = [c for c in ["pelicula", "serie", "anime_serie", "anime_pelicula"] if self._prefetch_pool.get(c) is None]
-        if not missing:
-            return
-            
-        self._is_prefetching = True
-        
-        def _fetch():
-            try:
-                for cat in missing:
-                    if self._prefetch_pool.get(cat) is None:
-                        curr_id = self.recomendacion_actual.id if self.recomendacion_actual else None
-                        rec = recommendation.recomendacion_de_hoy(ignorar_id=curr_id, es_prefetch=True, categoria=cat)
-                        if rec:
-                            img = self._download_poster(rec.poster_url)
-                            uc = repository.obtener_usuario_contenido_por_contenido_id(rec.id)
-                            progreso = None
-                            if rec.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
-                                progreso = repository.obtener_progreso_serie(uc.id)
-                            self._prefetch_pool[cat] = (rec, img, uc, progreso)
-            except Exception as e:
-                print("Error prefetching:", e)
-            finally:
-                self._is_prefetching = False
-                
-        threading.Thread(target=_fetch, daemon=True).start()
-
     def refresh_hoy(self, forzar_aleatoria=False, ignorar_id=None):
         if not hasattr(self, '_rec_request_id'):
             self._rec_request_id = 0
@@ -742,74 +732,46 @@ class QueVeoHoyApp:
         if hasattr(self, 'btn_siguiente') and self.btn_siguiente.winfo_exists():
             self.btn_siguiente.configure(state="disabled")
             
-        if not hasattr(self, '_prefetch_pool'):
-            self._prefetch_pool = {}
-            
         if not self.recomendacion_actual:
-            if not forzar_aleatoria:
-                avail_cats = [cat for cat in self._prefetch_pool if self._prefetch_pool[cat] is not None]
-                if ignorar_id:
-                    avail_cats = [cat for cat in avail_cats if self._prefetch_pool[cat][0].id != ignorar_id]
+            if getattr(self, '_ignorar_en_progreso_en_sesion', False):
+                forzar_aleatoria = True
                 
-                if avail_cats:
-                    cat = random.choice(avail_cats)
-                    rec, img, uc, progreso = self._prefetch_pool[cat]
-                    self._prefetch_pool[cat] = None
-                    
-                    self._apply_rec(rec, img=img, uc=uc, progreso=progreso, current_id=current_id)
-                    return
-                
-            if not hasattr(self, '_first_load_done'):
-                self._set_state_loading("Iniciando motor...", "Buscando la mejor recomendación para hoy...")
-                self._first_load_done = True
-            else:
-                self._set_state_loading("Cargando...", "Buscando la siguiente recomendación...")
-                
-            def _fetch():
-                try:
-                    rec = recommendation.recomendacion_de_hoy(forzar_aleatoria=forzar_aleatoria, ignorar_id=ignorar_id)
-                    if current_id != self._rec_request_id: return
-                    
-                    img = None
-                    uc = None
+            omitidas = getattr(self, '_series_en_progreso_omitidas', set())
+            
+            def _fetch_and_apply():
+                rec = recommendation.recomendacion_de_hoy(forzar_aleatoria=forzar_aleatoria, ignorar_id=ignorar_id, series_omitidas=omitidas)
+                if rec:
+                    img = self._download_poster(rec.id, rec.poster_url)
+                    uc = repository.obtener_usuario_contenido_por_contenido_id(rec.id)
                     progreso = None
-                    
-                    if rec:
-                        img = self._download_poster(rec.poster_url)
-                        uc = repository.obtener_usuario_contenido_por_contenido_id(rec.id)
-                        if rec.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
-                            progreso = repository.obtener_progreso_serie(uc.id)
-                            
-                    if current_id != self._rec_request_id: return
-                    
-                    self.ui_queue.put(lambda r=rec, i=img, u=uc, p=progreso: self._apply_rec(r, img=i, uc=u, progreso=p, current_id=current_id))
-                    self.ui_queue.put(self._prefetch_next)
-                except Exception as e:
-                    err_msg = str(e)
-                    if current_id != self._rec_request_id: return
-                    self.ui_queue.put(lambda msg=err_msg: self._apply_rec(None, error=msg, current_id=current_id))
-            threading.Thread(target=_fetch, daemon=True).start()
+                    if rec.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
+                        progreso = repository.obtener_progreso_serie(uc.id)
+                    self.ui_queue.put(lambda: self._apply_rec(rec, img=img, uc=uc, progreso=progreso, current_id=current_id))
+                else:
+                    if not hasattr(self, '_first_load_done'):
+                        self.ui_queue.put(lambda: self._set_state_loading("Iniciando motor...", "Buscando la mejor recomendación para hoy..."))
+                        self._first_load_done = True
+                    else:
+                        self.ui_queue.put(lambda: self._apply_rec(None, error="No hay recomendaciones disponibles por el momento.", current_id=current_id))
+                        
+            threading.Thread(target=_fetch_and_apply, daemon=True).start()
         else:
             if hasattr(self, 'poster_img_actual') and self.poster_img_actual:
-                def _fetch_state():
-                    uc = repository.obtener_usuario_contenido_por_contenido_id(self.recomendacion_actual.id)
-                    progreso = None
-                    if self.recomendacion_actual.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
-                        progreso = repository.obtener_progreso_serie(uc.id)
-                    if current_id != self._rec_request_id: return
-                    self.ui_queue.put(lambda u=uc, p=progreso: self._apply_rec(self.recomendacion_actual, img=self.poster_img_actual, uc=u, progreso=p, current_id=current_id))
-                threading.Thread(target=_fetch_state, daemon=True).start()
+                uc = repository.obtener_usuario_contenido_por_contenido_id(self.recomendacion_actual.id)
+                progreso = None
+                if self.recomendacion_actual.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
+                    progreso = repository.obtener_progreso_serie(uc.id)
+                self._apply_rec(self.recomendacion_actual, img=self.poster_img_actual, uc=uc, progreso=progreso, current_id=current_id)
             else:
-                def _fetch_poster_state():
-                    img = self._download_poster(self.recomendacion_actual.poster_url)
+                def _fetch_existing():
+                    img = self._download_poster(self.recomendacion_actual.id, self.recomendacion_actual.poster_url)
                     uc = repository.obtener_usuario_contenido_por_contenido_id(self.recomendacion_actual.id)
                     progreso = None
                     if self.recomendacion_actual.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
                         progreso = repository.obtener_progreso_serie(uc.id)
-                    if current_id != self._rec_request_id: return
-                    self.ui_queue.put(lambda u=uc, p=progreso: self._apply_rec(self.recomendacion_actual, img=img, uc=u, progreso=p, current_id=current_id))
-                    self.ui_queue.put(self._prefetch_next)
-                threading.Thread(target=_fetch_poster_state, daemon=True).start()
+                    self.ui_queue.put(lambda: self._apply_rec(self.recomendacion_actual, img=img, uc=uc, progreso=progreso, current_id=current_id))
+                    
+                threading.Thread(target=_fetch_existing, daemon=True).start()
 
     def _apply_rec(self, rec, error=None, img=None, uc=None, progreso=None, current_id=None):
         if current_id is not None and current_id != getattr(self, '_rec_request_id', -1):
@@ -822,6 +784,13 @@ class QueVeoHoyApp:
         self.recomendacion_actual = rec
         self.poster_img_actual = img
         
+        if rec and getattr(rec, 'id', None):
+            uc = repository.obtener_usuario_contenido_por_contenido_id(rec.id)
+            if rec.tipo == TIPO_SERIE and uc and uc.estado in (ESTADO_EN_PROGRESO, ESTADO_PAUSADA):
+                progreso = repository.obtener_progreso_serie(uc.id)
+            else:
+                progreso = None
+
         if rec and getattr(rec, 'titulo', None):
             def _upsert_historial():
                 try:
@@ -837,14 +806,16 @@ class QueVeoHoyApp:
         
         self._set_state_content()
         
-        self.btn_visto.configure(state="normal")
+        self.btn_visto.configure(text="✔ Ya la vi", state="normal")
         self.btn_para_despues.configure(state="normal")
-        self.btn_siguiente.configure(state="normal")
+        self.btn_siguiente.configure(text="⏭ Siguiente", state="normal")
         self.btn_pausar.configure(state="normal")
         self.btn_abandonar.configure(state="normal")
         self.btn_ya_viendo.configure(state="normal")
-        self.btn_ya_termine.configure(state="normal")
+        self.btn_ya_termine.configure(text="✔ Ya la terminé", state="normal")
         self.btn_ajustar_progreso.configure(state="normal")
+        self.btn_empezar_pelicula.configure(text="▶ Empezar Película", state="normal")
+        self.btn_terminar_pelicula.configure(text="✔ Terminada", state="normal")
         
         self.btn_visto.pack_forget()
         self.btn_para_despues.pack_forget()
@@ -917,14 +888,14 @@ class QueVeoHoyApp:
             
             if uc and uc.estado == ESTADO_EN_PROGRESO:
                 self.btn_visto.pack_forget()
-                self.btn_terminar_pelicula.pack(side='left', padx=5)
+                self.btn_terminar_pelicula.pack(side='top', pady=5)
             else:
                 self.btn_para_despues.pack(side='left', padx=5)
                 
                 self.btn_empezar_pelicula.configure(
                     text="▶ Empezar", fg_color="#0891B2", hover_color="#164E63", command=self.on_empezar_pelicula
                 )
-                self.btn_empezar_pelicula.pack(side='left', padx=5)
+                self.btn_empezar_pelicula.pack(side='top', pady=5)
                 
                 self.btn_siguiente.configure(
                     text="⏭ Siguiente", fg_color="#4C1D95", hover_color="#3B0764", text_color="#DDD6FE", border_color="#DDD6FE", command=self.on_siguiente
@@ -971,14 +942,14 @@ class QueVeoHoyApp:
         self.lbl_sinopsis.tag_add("center", "1.0", "end")
         self.lbl_sinopsis.configure(state="disabled")
 
-        self.card_frame.update_idletasks()
+
 
     def on_empezar_pelicula(self):
+        if hasattr(self, 'btn_empezar_pelicula'):
+            self.btn_empezar_pelicula.configure(text="Guardando...", state="disabled")
         if self.recomendacion_actual:
             c = self.recomendacion_actual
             uc = recommendation.agregar_a_biblioteca(c.id)
-            
-            self.btn_empezar_pelicula.configure(text="Guardando...", state="disabled")
             
             def _process():
                 try:
@@ -993,11 +964,14 @@ class QueVeoHoyApp:
             threading.Thread(target=_process, daemon=True).start()
 
     def on_marcar_visto(self):
+        if hasattr(self, 'btn_visto'):
+            self.btn_visto.configure(text="Guardando...", state="disabled")
+        if hasattr(self, 'btn_terminar_pelicula'):
+            self.btn_terminar_pelicula.configure(text="Guardando...", state="disabled")
+            
         if self.recomendacion_actual:
             c = self.recomendacion_actual
             uc = recommendation.agregar_a_biblioteca(c.id)
-            
-            self.btn_visto.configure(text="Guardando...", state="disabled")
             
             def _process():
                 try:
@@ -1026,39 +1000,41 @@ class QueVeoHoyApp:
             threading.Thread(target=_process, daemon=True).start()
 
     def on_para_despues(self):
+        if hasattr(self, 'btn_para_despues'):
+            self.btn_para_despues.configure(state="disabled")
         if self.recomendacion_actual:
             c = self.recomendacion_actual
             self.recomendacion_actual = None
             
-            def _process():
-                uc = recommendation.agregar_a_biblioteca(c.id)
-                recommendation.guardar_para_despues(uc.id)
-                self.ui_queue.put(self.refrescar_todo)
-                self.ui_queue.put(self._prefetch_next)
-                
-            threading.Thread(target=_process, daemon=True).start()
+            uc = recommendation.agregar_a_biblioteca(c.id)
+            recommendation.guardar_para_despues(uc.id)
+            self.refrescar_todo()
+            
             self.refresh_hoy()
 
     def on_siguiente(self):
+        if hasattr(self, 'btn_siguiente'):
+            self.btn_siguiente.configure(state="disabled")
         if self.recomendacion_actual:
             c = self.recomendacion_actual
             self.recomendacion_actual = None
             
             uc = recommendation.repository.obtener_usuario_contenido_por_contenido_id(c.id)
-            was_series_in_progress = c.tipo == "TV" and uc and uc.estado == "en_progreso"
+            was_in_progress = uc and uc.estado == "en_progreso"
             
-            if was_series_in_progress:
-                self._prefetch_pool.clear()
-            
-            def _process():
-                recommendation.registrar_siguiente(c.id)
-                self.ui_queue.put(self._marcar_tabs_sucias)
-                self.ui_queue.put(self._prefetch_next)
+            if was_in_progress:
+                if not hasattr(self, '_series_en_progreso_omitidas'):
+                    self._series_en_progreso_omitidas = set()
+                self._series_en_progreso_omitidas.add(c.id)
+                self._ignorar_en_progreso_en_sesion = True
                 
-            threading.Thread(target=_process, daemon=True).start()
-            self.refresh_hoy(forzar_aleatoria=was_series_in_progress, ignorar_id=c.id)
+            recommendation.registrar_siguiente(c.id)
+            self._marcar_tabs_sucias()
+            self.refresh_hoy(forzar_aleatoria=was_in_progress, ignorar_id=c.id)
 
     def on_pausar(self):
+        if hasattr(self, 'btn_pausar'):
+            self.btn_pausar.configure(state="disabled")
         if self.recomendacion_actual:
             c = self.recomendacion_actual
             self.recomendacion_actual = None
@@ -1066,19 +1042,16 @@ class QueVeoHoyApp:
             uc = recommendation.repository.obtener_usuario_contenido_por_contenido_id(c.id)
             was_series_in_progress = c.tipo == "TV" and uc and uc.estado == "en_progreso"
             
-            if was_series_in_progress:
-                self._prefetch_pool.clear()
-                
-            def _process():
-                if uc:
-                    recommendation.pausar_serie(uc.id)
-                self.ui_queue.put(lambda: self.show_toast("Serie pausada."))
-                self.ui_queue.put(self._marcar_tabs_sucias)
-                
-            threading.Thread(target=_process, daemon=True).start()
+            if uc:
+                recommendation.pausar_serie(uc.id)
+            self.show_toast("Serie pausada.")
+            self._marcar_tabs_sucias()
+            
             self.refresh_hoy(forzar_aleatoria=was_series_in_progress, ignorar_id=c.id)
                 
     def on_abandonar(self):
+        if hasattr(self, 'btn_abandonar'):
+            self.btn_abandonar.configure(state="disabled")
         if self.recomendacion_actual:
             c = self.recomendacion_actual
             uc = repository.obtener_usuario_contenido_por_contenido_id(c.id)
@@ -1089,6 +1062,8 @@ class QueVeoHoyApp:
                 self.refrescar_todo()
                 
     def on_ya_viendo(self):
+        if hasattr(self, 'btn_ya_viendo'):
+            self.btn_ya_viendo.configure(state="disabled")
         if self.recomendacion_actual:
             c = self.recomendacion_actual
             uc = repository.obtener_usuario_contenido_por_contenido_id(c.id)
@@ -1106,6 +1081,8 @@ class QueVeoHoyApp:
             ModalProgresoSerie(self.root, c, uc.id if hasattr(uc, 'id') else uc.id, _on_success)
             
     def on_ajustar_progreso(self):
+        if hasattr(self, 'btn_ajustar_progreso'):
+            self.btn_ajustar_progreso.configure(state="disabled")
         if self.recomendacion_actual:
             c = self.recomendacion_actual
             uc = repository.obtener_usuario_contenido_por_contenido_id(c.id)
@@ -1122,6 +1099,8 @@ class QueVeoHoyApp:
             ModalAjusteProgreso(self.root, c, uc.id, _on_success)
 
     def on_ya_termine(self):
+        if hasattr(self, 'btn_ya_termine'):
+            self.btn_ya_termine.configure(state="disabled")
         if self.recomendacion_actual:
             c = self.recomendacion_actual
             if not c or not getattr(c, 'id', None):
@@ -1249,8 +1228,8 @@ class QueVeoHoyApp:
             
             c = repository.obtener_contenido_por_id(item.contenido_id)
             if c and c.poster_url:
-                def _load_img(url, lbl):
-                    img = self._download_poster(url, size=(65, 100))
+                def _load_img(url, lbl, cid=c.id):
+                    img = self._download_poster(cid, url, size=(65, 100))
                     if img:
                         self.ui_queue.put(lambda l=lbl, i=img: l.configure(image=i, text="") if l.winfo_exists() else None)
                 threading.Thread(target=_load_img, args=(c.poster_url, lbl_poster), daemon=True).start()
@@ -1259,7 +1238,9 @@ class QueVeoHoyApp:
             text_container = ctk.CTkFrame(tit_frame, fg_color="transparent", cursor="hand2")
             text_container.pack(side="left", anchor="center")
             
-            lbl_tit = ctk.CTkLabel(text_container, text=item.titulo, font=("Segoe UI", 15, "bold"), text_color="#F8FAFC", anchor="w", cursor="hand2")
+            MAX_TITULO_WIDTH_PROGRESO_PX = 380
+            titulo_trunc = self._truncar_texto(item.titulo, ("Segoe UI", 15, "bold"), MAX_TITULO_WIDTH_PROGRESO_PX)
+            lbl_tit = ctk.CTkLabel(text_container, text=titulo_trunc, font=("Segoe UI", 15, "bold"), text_color="#F8FAFC", anchor="w", cursor="hand2")
             lbl_tit.pack(anchor="w")
             
             if item.es_anime:
@@ -1355,17 +1336,7 @@ class QueVeoHoyApp:
         uc_id = self.selected_prog_uc_id
         try:
             recommendation.reanudar_serie(uc_id)
-            self.show_toast("Serie reanudada y lista en Hoy")
-            
-            # Fetch content to push to Hoy
-            uc = recommendation.repository.obtener_usuario_contenido_por_id(uc_id)
-            if uc:
-                c = recommendation.repository.obtener_contenido_por_id(uc.contenido_id)
-                if c:
-                    self.recomendacion_actual = c
-                    self._prefetch_pool.clear()
-                    self.set_tab("Hoy")
-            
+            self.show_toast("Serie reanudada")
             self.refrescar_todo()
         except recommendation.LimiteSeriesEnProgresoAlcanzado as e:
             messagebox.showerror("Límite Alcanzado", str(e))
@@ -1620,7 +1591,8 @@ class QueVeoHoyApp:
             row_frame.grid_columnconfigure(1, minsize=140, weight=0)
             row_frame.grid_columnconfigure(2, minsize=160, weight=1)
             
-            titulo_trunc = c.titulo[:33] + "..." if len(c.titulo) > 35 else c.titulo
+            MAX_TITULO_WIDTH_BIBLIOTECA_PX = 260
+            titulo_trunc = self._truncar_texto(c.titulo, ("Segoe UI", 13, "normal"), MAX_TITULO_WIDTH_BIBLIOTECA_PX)
             
             lbl_tit = ctk.CTkLabel(row_frame, text=titulo_trunc, font=("Segoe UI", 13, "normal"), text_color="#F1F5F9", anchor="w", cursor="hand2")
             lbl_tit.grid(row=0, column=0, sticky="w", padx=15, pady=8)
@@ -1681,6 +1653,7 @@ class QueVeoHoyApp:
                 messagebox.showerror("Error", str(e))
         else:
             self.show_toast("Película seleccionada para ver hoy")
+            recommendation.marcar_activa_hoy(c.id)
             self.recomendacion_actual = c
             self._prefetch_pool.clear()
             self.refrescar_todo()
@@ -2020,9 +1993,9 @@ class QueVeoHoyApp:
             poster_lbl.grid(row=0, column=0, padx=10, pady=10)
             
             if c.poster_url:
-                def _load_img(url, lbl):
+                def _load_img(url, lbl, cid=c.id):
                     try:
-                        img = self._download_poster(url, size=(60, 90))
+                        img = self._download_poster(cid, url, size=(60, 90))
                         if img:
                             self.ui_queue.put(lambda l=lbl, i=img: l.configure(image=i, text="") if l.winfo_exists() else None)
                     except Exception as e:

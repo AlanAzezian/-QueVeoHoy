@@ -2,6 +2,11 @@ import random
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
+import threading
+import time
+import urllib.request
+import urllib.error
+from pathlib import Path
 
 from app.providers.tmdb import TMDBProvider
 from app.providers.jikan import JikanProvider
@@ -97,6 +102,9 @@ def cambiar_estado(usuario_contenido_id: int, nuevo_estado: str) -> UsuarioConte
         raise ValueError(f"No se encontró el UsuarioContenido con ID {usuario_contenido_id}")
         
     estado_actual = usuario_contenido.estado
+    
+    if estado_actual == nuevo_estado:
+        return usuario_contenido
     
     if nuevo_estado not in TRANSICIONES_VALIDAS.get(estado_actual, set()):
         raise TransicionEstadoInvalida(
@@ -225,6 +233,13 @@ def registrar_siguiente(contenido_id: int) -> None:
     a su biblioteca.
     """
     repository.upsert_historial_recomendacion(contenido_id, "SIGUIENTE")
+    repository.eliminar_catalogo_offline(contenido_id)
+
+def marcar_activa_hoy(contenido_id: int) -> None:
+    """
+    Fuerza que un contenido sea la recomendación activa de hoy.
+    """
+    repository.upsert_historial_recomendacion(contenido_id, "RECOMENDADA_HOY")
 
 def empezar_serie(usuario_contenido_id: int) -> ProgresoSerie:
     """
@@ -666,116 +681,38 @@ def obtener_biblioteca_inactiva() -> list[ElementoBiblioteca]:
             res.append(ElementoBiblioteca(usuario_contenido=uc, contenido=c))
     return res
 
-def recomendacion_de_hoy(ignorar_id: int = None, es_prefetch: bool = False, forzar_aleatoria: bool = False, categoria: str = None) -> Optional[Contenido]:
+def recomendacion_de_hoy(forzar_aleatoria: bool = False, ignorar_id: int = None, series_omitidas: set = None) -> Optional[Contenido]:
     """
-    Motor de recomendación diario.
-    1. Si hay series en progreso (y no se forzó aleatoria), devuelve la primera (a menos que sea prefetch).
-    2. Si no, pide tendencias al Provider (TMDB), filtra las ya vistas/descartadas/abandonadas,
-       y elige una al azar.
+    Motor principal de recomendación (Síncrono/Local).
+    
+    Flujo:
+    1. Mostrar Serie 'En progreso' (si forzar_aleatoria=False). Si es omitida en la sesión, la saltea.
+    2. Fallback: Catálogo local rotativo (Offline-First).
     """
-    if not forzar_aleatoria and not es_prefetch:
-        activa = repository.obtener_recomendacion_activa_hoy()
-        if activa and activa.id != ignorar_id:
-            return activa
-
-    if not forzar_aleatoria and not es_prefetch:
+    
+    # 1. Intentar serie en progreso si no se fuerza aleatoria
+    if not forzar_aleatoria:
         en_progreso = repository.obtener_usuario_contenido_en_progreso_all()
+        # Filtramos las ignoradas por la sesión actual
+        if series_omitidas:
+            en_progreso = [uc for uc in en_progreso if uc.contenido_id not in series_omitidas]
+            
         if en_progreso:
             c = repository.obtener_contenido_por_id(en_progreso[0].contenido_id)
             if c:
                 return c
+
+    if not forzar_aleatoria:
+        activa = repository.obtener_recomendacion_activa_hoy()
+        if activa and activa.id != ignorar_id:
+            return activa
             
-    import datetime
-    today_str = datetime.date.today().isoformat()
-    historial_reciente = repository.obtener_historial_recomendaciones(limit=50)
-    
-    # Check if we already generated a recommendation today and it's still valid
-    for h in historial_reciente:
-        if h.fecha and h.fecha.startswith(today_str) and h.accion == "RECOMENDADA_HOY":
-            if ignorar_id and h.contenido_id == ignorar_id:
-                continue
-            c_db = repository.obtener_contenido_por_id(h.contenido_id)
-            if c_db:
-                uc = repository.obtener_usuario_contenido_por_contenido_id(c_db.id)
-                if uc and uc.estado != PENDIENTE:
-                    continue
-                if es_prefetch:
-                    return c_db
-                return c_db
-            
-    tmdb_provider = TMDBProvider()
-    jikan_provider = JikanProvider()
-    bolsa = []
-    
-    if categoria == "pelicula":
-        bolsa = tmdb_provider.obtener_tendencias_peliculas()[:10]
-    elif categoria == "serie":
-        bolsa = tmdb_provider.obtener_tendencias_series()[:10]
-    elif categoria == "anime_serie":
-        bolsa = jikan_provider.obtener_tendencias_anime(tipo="tv")[:10]
-        if not bolsa:
-            bolsa = tmdb_provider.obtener_tendencias_anime(tipo="tv")[:10]
-    elif categoria == "anime_pelicula":
-        bolsa = jikan_provider.obtener_tendencias_anime(tipo="movie")[:10]
-        if not bolsa:
-            bolsa = tmdb_provider.obtener_tendencias_anime(tipo="movie")[:10]
-    else:
-        # Default fallback
-        peliculas = tmdb_provider.obtener_tendencias_peliculas()[:10]
-        series = tmdb_provider.obtener_tendencias_series()[:10]
-        anime_series = jikan_provider.obtener_tendencias_anime(tipo="tv")[:10]
-        if not anime_series:
-            anime_series = tmdb_provider.obtener_tendencias_anime(tipo="tv")[:10]
-        anime_movies = jikan_provider.obtener_tendencias_anime(tipo="movie")[:10]
-        if not anime_movies:
-            anime_movies = tmdb_provider.obtener_tendencias_anime(tipo="movie")[:10]
+    c_db = repository.obtener_catalogo_offline_random()
+    if c_db:
+        repository.upsert_historial_recomendacion(c_db.id, "RECOMENDADA_HOY")
+        return c_db
         
-        bolsa.extend(peliculas)
-        bolsa.extend(series)
-        bolsa.extend(anime_series)
-        bolsa.extend(anime_movies)
-    
-    candidatos_validos = []
-    for cont in bolsa:
-        if cont.mal_id is not None:
-            c_db = repository.obtener_contenido_por_mal_id(cont.mal_id)
-        else:
-            c_db = repository.obtener_contenido_por_tmdb_id(cont.tmdb_id, cont.tipo)
-            
-        if c_db:
-            uc = repository.obtener_usuario_contenido_por_contenido_id(c_db.id)
-            hist = repository.obtener_historial_recomendacion_por_contenido_id(c_db.id)
-            
-            if uc and uc.estado in (TERMINADA, ABANDONADA, PAUSADA, EN_PROGRESO):
-                continue
-                
-            if hist and hist.accion == "SIGUIENTE":
-                continue
-                
-        candidatos_validos.append(cont)
-        
-    if not candidatos_validos:
-        if bolsa:
-            return random.choice(bolsa)
-        return None
-        
-    elegido = random.choice(candidatos_validos)
-    
-    if elegido.mal_id is not None:
-        c_db = repository.obtener_contenido_por_mal_id(elegido.mal_id)
-    else:
-        c_db = repository.obtener_contenido_por_tmdb_id(elegido.tmdb_id, elegido.tipo)
-        
-    if not c_db:
-        new_id = repository.insertar_contenido(elegido)
-        elegido.id = new_id
-    else:
-        elegido = c_db
-        
-    if not es_prefetch:
-        repository.upsert_historial_recomendacion(elegido.id, "RECOMENDADA_HOY")
-        
-    return elegido
+    return None
 
 def avanzar_progreso_serie(usuario_contenido_id: int) -> tuple[ProgresoSerie, UsuarioContenido, bool]:
     """
@@ -934,3 +871,104 @@ def buscar_online(query: str) -> list[Contenido]:
     
     return resultados_tmdb + resultados_jikan
 
+CACHE_POSTERS_DIR = Path.home() / '.queveohoy' / 'cache_posters'
+CACHE_POSTERS_DIR.mkdir(parents=True, exist_ok=True)
+
+def descargar_poster_local(contenido_id: int, poster_url: str) -> bool:
+    if not poster_url:
+        return False
+    ruta = CACHE_POSTERS_DIR / f"{contenido_id}.jpg"
+    if ruta.exists():
+        return True
+    try:
+        req = urllib.request.Request(poster_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5.0) as response:
+            with open(ruta, 'wb') as f:
+                f.write(response.read())
+        return True
+    except Exception as e:
+        print(f"Error descargando poster {poster_url}: {e}")
+        return False
+
+def mantenimiento_catalogo():
+    """ Worker que mantiene ~150 items en catálogo y borra los no utilizados """
+    
+    # 1. Restaurar posters de biblioteca si faltan (para "En progreso" y "Biblioteca")
+    try:
+        contenidos_bib = repository.obtener_todos_contenidos_en_biblioteca()
+        for c in contenidos_bib:
+            if c.poster_url:
+                descargar_poster_local(c.id, c.poster_url)
+    except Exception as e:
+        print("Error restaurando posters de biblioteca:", e)
+
+    while True:
+        try:
+            total = repository.contar_catalogo_offline()
+            if total < 30:
+                print(f"Catálogo offline bajo ({total}), sincronizando...")
+                tmdb_provider = TMDBProvider()
+                jikan_provider = JikanProvider()
+                
+                bolsa = []
+                bolsa.extend(tmdb_provider.obtener_tendencias_peliculas()[:10])
+                bolsa.extend(tmdb_provider.obtener_tendencias_series()[:10])
+                
+                anime_s = jikan_provider.obtener_tendencias_anime(tipo="tv")[:5]
+                if not anime_s:
+                    anime_s = tmdb_provider.obtener_tendencias_anime(tipo="tv")[:5]
+                bolsa.extend(anime_s)
+                
+                anime_m = jikan_provider.obtener_tendencias_anime(tipo="movie")[:5]
+                if not anime_m:
+                    anime_m = tmdb_provider.obtener_tendencias_anime(tipo="movie")[:5]
+                bolsa.extend(anime_m)
+                
+                for cont in bolsa:
+                    if cont.mal_id is not None:
+                        c_db = repository.obtener_contenido_por_mal_id(cont.mal_id)
+                    else:
+                        c_db = repository.obtener_contenido_por_tmdb_id(cont.tmdb_id, cont.tipo)
+                        
+                    if c_db:
+                        uc = repository.obtener_usuario_contenido_por_contenido_id(c_db.id)
+                        hist = repository.obtener_historial_recomendacion_por_contenido_id(c_db.id)
+                        if uc and uc.estado in (TERMINADA, ABANDONADA, PAUSADA, EN_PROGRESO):
+                            continue
+                        if hist and hist.accion == "SIGUIENTE":
+                            continue
+                        cont.id = c_db.id
+                    else:
+                        cont.id = repository.insertar_contenido(cont)
+                        
+                    if cont.poster_url:
+                        descargar_poster_local(cont.id, cont.poster_url)
+                        
+                    repository.insertar_catalogo_offline(cont.id)
+            
+            # Garbage Collection
+            catalogo_ids = set(repository.obtener_catalogo_offline_ids())
+            if len(catalogo_ids) > 150:
+                a_borrar = list(catalogo_ids)[:len(catalogo_ids)-150]
+                for cid in a_borrar:
+                    repository.eliminar_catalogo_offline(cid)
+                    catalogo_ids.discard(cid)
+                    
+            for archivo in CACHE_POSTERS_DIR.glob("*.jpg"):
+                try:
+                    cid = int(archivo.stem)
+                    if cid not in catalogo_ids:
+                        uc = repository.obtener_usuario_contenido_por_contenido_id(cid)
+                        if not uc:
+                            archivo.unlink(missing_ok=True)
+                except ValueError:
+                    pass
+                    
+        except Exception as e:
+            print("Error en worker de catálogo:", e)
+            
+        time.sleep(30)
+
+def iniciar_worker_catalogo():
+    t = threading.Thread(target=mantenimiento_catalogo, daemon=True)
+    t.start()

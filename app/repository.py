@@ -702,4 +702,79 @@ def obtener_estado_en_biblioteca(item: Contenido) -> Optional[str]:
             return uc.estado
     return None
 
+def insertar_catalogo_offline(contenido_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR IGNORE INTO catalogo_offline (contenido_id, fecha_agregado)
+        VALUES (?, datetime('now'))
+    ''', (contenido_id,))
+    conn.commit()
+    conn.close()
+
+def eliminar_catalogo_offline(contenido_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM catalogo_offline WHERE contenido_id = ?', (contenido_id,))
+    conn.commit()
+    conn.close()
+
+def contar_catalogo_offline() -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) as c FROM catalogo_offline')
+    row = cursor.fetchone()
+    conn.close()
+    return row['c'] if row else 0
+
+def obtener_catalogo_offline_ids() -> list[int]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT contenido_id FROM catalogo_offline')
+    rows = cursor.fetchall()
+    conn.close()
+    return [r['contenido_id'] for r in rows]
+
+def obtener_catalogo_offline_random(categoria: str = None) -> Optional[Contenido]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    query = '''
+        SELECT c.id, c.tmdb_id, c.mal_id, c.tipo, c.es_anime, c.titulo, c.titulo_original,
+               c.poster_url, c.sinopsis, c.fecha_estreno, c.creado_en
+        FROM catalogo_offline co
+        JOIN contenido c ON co.contenido_id = c.id
+    '''
+    
+    if categoria == "pelicula":
+        query += " WHERE c.tipo = 'MOVIE' AND (c.es_anime = 0 OR c.es_anime IS NULL)"
+    elif categoria == "serie":
+        query += " WHERE c.tipo = 'TV' AND (c.es_anime = 0 OR c.es_anime IS NULL)"
+    elif categoria == "anime_serie":
+        query += " WHERE c.tipo = 'TV' AND c.es_anime = 1"
+    elif categoria == "anime_pelicula":
+        query += " WHERE c.tipo = 'MOVIE' AND c.es_anime = 1"
+        
+    query += " ORDER BY RANDOM() LIMIT 1"
+    
+    cursor.execute(query)
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        return Contenido(
+            id=row['id'],
+            tmdb_id=row['tmdb_id'],
+            mal_id=row['mal_id'],
+            tipo=row['tipo'],
+            es_anime=bool(row['es_anime']),
+            titulo=row['titulo'],
+            titulo_original=row['titulo_original'],
+            poster_url=row['poster_url'],
+            sinopsis=row['sinopsis'],
+            fecha_estreno=row['fecha_estreno'],
+            creado_en=row['creado_en']
+        )
+    return None
+
 

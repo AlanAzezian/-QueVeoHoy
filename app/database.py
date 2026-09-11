@@ -110,6 +110,14 @@ CREATE TABLE IF NOT EXISTS tv_metadata_cache (
     total_temporadas INTEGER NOT NULL,
     temporadas_json TEXT NOT NULL
 );
+
+-- =========================================================
+-- 7. CATALOGO_OFFLINE — pool rotativo offline (max ~150 ítems)
+-- =========================================================
+CREATE TABLE IF NOT EXISTS catalogo_offline (
+    contenido_id    INTEGER PRIMARY KEY REFERENCES contenido(id),
+    fecha_agregado  TEXT NOT NULL DEFAULT (datetime('now'))
+);
     ''')
 
     # Saneamiento de datos de Anime
