@@ -94,36 +94,9 @@ function App() {
     if (retryCount === 0) setLoading(true);
     
     try {
-      let rec = await invoke("get_recommendation");
+      let rec = await invoke("get_recommendation", { generos: selectedGeneros.length > 0 ? selectedGeneros : null });
       
-      // Lógica de filtrado por género
-      let localRetry = retryCount;
-      while (rec && selectedGeneros.length > 0 && localRetry < 40) {
-        let recGeneros: string[] = [];
-        const genData = (rec as any).contenido?.generos;
-        if (typeof genData === 'string') {
-          try {
-            const parsed = JSON.parse(genData);
-            recGeneros = Array.isArray(parsed) ? parsed : [];
-          } catch {
-            recGeneros = genData.split(',').map((s: string) => s.trim());
-          }
-        }
-        
-        const hasMatch = selectedGeneros.some(g => recGeneros.includes(g));
-        if (hasMatch) break;
-        
-        // No match: omit from session but don't log in bitacora
-        await invoke("mark_as_omitted", { 
-          id: (rec as any).contenido.id, 
-          registrarEnBitacora: false 
-        }).catch(() => {});
-        
-        rec = await invoke("get_recommendation");
-        localRetry++;
-      }
-      
-      if (localRetry >= 40 || (!rec && selectedGeneros.length > 0)) {
+      if (!rec && selectedGeneros.length > 0) {
          setToastMessage("No se encontraron obras con esos géneros en el catálogo");
       }
       
@@ -140,22 +113,7 @@ function App() {
     if (activeTab === "hoy" && !recomendacion && !isFetchingRef.current) {
       loadRecommendation();
     }
-  }, [activeTab, recomendacion, selectedGeneros]); // Added selectedGeneros
-
-  // Polling for fresh content when catalogo_offline is empty
-  useEffect(() => {
-    let interval: number | undefined;
-    if (activeTab === "hoy" && !loading && !recomendacion) {
-      interval = window.setInterval(() => {
-        if (!isFetchingRef.current) {
-          loadRecommendation();
-        }
-      }, 3000);
-    }
-    return () => {
-      if (interval) window.clearInterval(interval);
-    };
-  }, [activeTab, loading, recomendacion]);
+  }, [activeTab, recomendacion, selectedGeneros]);
 
   const handleSiguiente = async (registrarEnBitacora: boolean = true) => {
     if (recomendacion?.contenido) {
@@ -297,9 +255,10 @@ function App() {
               )}
             </div>
           )}
-          {activeTab === "hoy" && recomendacion?.estado === "en_progreso" && (
+          {activeTab === "hoy" && (
             <button 
               onClick={async () => {
+                if (recomendacion?.estado !== "en_progreso") return;
                 console.log("[DEBUG] Saltar en progreso ejecutado");
                 try {
                   await invoke("omitir_todos_en_progreso");
@@ -309,8 +268,12 @@ function App() {
                   console.error(e);
                 }
               }}
-              disabled={loading}
-              className="px-4 py-1.5 text-xs font-medium border border-white/10 rounded-full bg-white/5 hover:bg-white/10 text-neutral-300 transition-all pointer-events-auto cursor-pointer relative z-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={loading || recomendacion?.estado !== "en_progreso"}
+              className={`px-4 py-1.5 text-xs font-medium border border-white/10 rounded-full transition-all relative z-50 ${
+                recomendacion?.estado === "en_progreso" && !loading
+                  ? "bg-white/5 hover:bg-white/10 text-neutral-300 pointer-events-auto cursor-pointer"
+                  : "bg-transparent text-neutral-500 pointer-events-none opacity-40"
+              }`}
             >
               Saltar en progreso
             </button>

@@ -9,6 +9,14 @@ use std::time::Instant;
 static JIKAN_FALLOS_RECIENTES: OnceLock<Mutex<HashMap<i32, Instant>>> = OnceLock::new();
 static ULTIMA_REQUEST_JIKAN: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 
+pub fn trigger_discovery() {
+    tauri::async_runtime::spawn(async {
+        if let Err(e) = run_discovery_cycle().await {
+            eprintln!("[Worker Trigger] Error: {}", e);
+        }
+    });
+}
+
 pub fn spawn_discovery_worker() {
     tauri::async_runtime::spawn(async {
         // Ejecución inmediata
@@ -56,16 +64,19 @@ pub fn spawn_discovery_worker() {
 async fn run_discovery_cycle() -> Result<(), String> {
     dotenvy::dotenv().ok();
     let tmdb_api_key = std::env::var("TMDB_API_KEY").unwrap_or_else(|_| "239957e2e77a70d1dd415586f3f551b0".to_string());
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .user_agent("QueVeoHoy/2.0 (https://github.com/alan/queveohoy)")
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
 
     loop {
-        let count = {
+        let total_real: i64 = {
             let conn = crate::db::get_connection().map_err(|e| e.to_string())?;
-            conn.query_row(&format!("SELECT COUNT(*) FROM catalogo_offline co LEFT JOIN usuario_contenido uc ON co.contenido_id = uc.contenido_id LEFT JOIN omitidos_sesion os ON co.contenido_id = os.contenido_id AND os.fecha >= date('now', 'localtime', '-{} days') WHERE uc.estado IS NULL AND os.contenido_id IS NULL", crate::db::DIAS_EXCLUSION_SKIP), [], |row| row.get::<_, i64>(0)).unwrap_or_else(|e| { eprintln!("[Worker] ERROR en query de conteo: {:?}", e); 0 })
+            conn.query_row("SELECT COUNT(*) FROM catalogo_offline", [], |r| r.get(0)).unwrap_or(0)
         };
         
-        if count >= 100 {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        if total_real >= 100 {
+            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
             continue;
         }
 
@@ -84,20 +95,20 @@ async fn run_discovery_cycle() -> Result<(), String> {
         let res = match type_choice {
             0 => fetch_tmdb_discover(&client, &tmdb_api_key, "movie", year).await,
             1 => fetch_tmdb_discover(&client, &tmdb_api_key, "tv", year).await,
-            2 => fetch_jikan_anime(&client, year).await,
+            2 => fetch_tmdb_anime(&client, &tmdb_api_key, year).await, // Jikan desactivado temporalmente
             _ => Ok(0),
         };
 
         match res {
             Ok(insertados) => {
-                let current_total = {
+                let total_real: i64 = {
                     if let Ok(conn) = crate::db::get_connection() {
-                        conn.query_row(&format!("SELECT COUNT(*) FROM catalogo_offline co LEFT JOIN usuario_contenido uc ON co.contenido_id = uc.contenido_id LEFT JOIN omitidos_sesion os ON co.contenido_id = os.contenido_id AND os.fecha >= date('now', 'localtime', '-{} days') WHERE uc.estado IS NULL AND os.contenido_id IS NULL", crate::db::DIAS_EXCLUSION_SKIP), [], |row| row.get::<_, i64>(0)).unwrap_or_else(|e| { eprintln!("[Worker] ERROR en query de conteo: {:?}", e); 0 })
+                        conn.query_row("SELECT COUNT(*) FROM catalogo_offline", [], |r| r.get(0)).unwrap_or(0)
                     } else {
-                        count + insertados as i64
+                        0
                     }
                 };
-                println!("[Worker] Insertados {} ítems en catalogo_offline. Total acumulado: {}", insertados, current_total);
+                println!("[Worker] Insertados {} ítems. Total real en catálogo: {}", insertados, total_real);
             }
             Err(e) => {
                 eprintln!("[Worker] Error: {}", e);
@@ -222,6 +233,79 @@ async fn fetch_tmdb_discover(client: &reqwest::Client, api_key: &str, media_type
     Ok(inserted_count)
 }
 
+async fn fetch_tmdb_anime(client: &reqwest::Client, api_key: &str, year: i32) -> Result<usize, String> {
+    let is_tv = rand::thread_rng().gen_bool(0.7); // 70% series, 30% películas
+    let media_type = if is_tv { "tv" } else { "movie" };
+    let year_param = if is_tv { "first_air_date_year" } else { "primary_release_year" };
+    
+    let init_url = format!("https://api.themoviedb.org/3/discover/{}?api_key={}&language=es-ES&include_adult=false&with_genres=16&with_origin_country=JP&{}={}", media_type, api_key, year_param, year);
+    
+    let resp = client.get(&init_url).send().await.map_err(|e| e.to_string())?;
+    println!("[Worker] HTTP Status (TMDB Anime): {}", resp.status());
+    if !resp.status().is_success() { return Ok(0); }
+    let json: Value = resp.json().await.map_err(|e| e.to_string())?;
+    
+    let total_pages = json["total_pages"].as_i64().unwrap_or(1).min(20) as i32;
+    if total_pages < 1 { return Ok(0); }
+    
+    let random_page = rand::thread_rng().gen_range(1..=total_pages);
+    let url = format!("{}&page={}", init_url, random_page);
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() { return Ok(0); }
+    
+    let mut inserted_count = 0;
+    let json: Value = resp.json().await.map_err(|e| e.to_string())?;
+    if let Some(results) = json["results"].as_array() {
+        let mut sample = results.clone();
+        let to_take = {
+            use rand::seq::SliceRandom;
+            sample.shuffle(&mut rand::thread_rng());
+            rand::thread_rng().gen_range(1..=3).min(sample.len())
+        };
+        
+        for item in sample.into_iter().take(to_take) {
+            let tmdb_id = item["id"].as_i64().unwrap_or(0);
+            if tmdb_id == 0 { continue; }
+            
+            let tipo = if is_tv { "TV" } else { "MOVIE" };
+            let sinopsis = item["overview"].as_str().map(|s| s.trim().to_string());
+            let poster_url = item["poster_path"].as_str().map(|s| s.trim().to_string());
+
+            if poster_url.as_deref().unwrap_or("").is_empty() || sinopsis.as_deref().unwrap_or("").len() < 15 {
+                continue;
+            }
+
+            let tmdb_genre_map: &[(i64, &str)] = &[
+                (28, "Acción"), (12, "Aventura"), (16, "Animación"), (35, "Comedia"),
+                (80, "Crimen"), (99, "Documental"), (18, "Drama"), (10751, "Familia"),
+                (14, "Fantasía"), (36, "Historia"), (27, "Terror"), (10402, "Música"),
+                (9648, "Misterio"), (10749, "Romance"), (878, "Ciencia Ficción"),
+                (10770, "Película de TV"), (53, "Suspenso"), (10752, "Bélico"), (37, "Western"),
+                (10759, "Acción y Aventura"), (10762, "Niños"), (10763, "Noticias"),
+                (10764, "Reality"), (10765, "Sci-Fi y Fantasía"), (10766, "Soap"),
+                (10767, "Talk Show"), (10768, "Guerra y Política"),
+            ];
+            let generos: Option<String> = if let Some(gids) = item["genre_ids"].as_array() {
+                let nombres: Vec<&str> = gids.iter()
+                    .filter_map(|g| g.as_i64())
+                    .filter_map(|id| tmdb_genre_map.iter().find(|(gid, _)| *gid == id).map(|(_, name)| *name))
+                    .take(4)
+                    .collect();
+                if nombres.is_empty() { None } else { Some(format!("[{}]", nombres.iter().map(|n| format!("\"{}\"", n)).collect::<Vec<_>>().join(","))) }
+            } else { None };
+
+            let titulo = item["title"].as_str().or(item["name"].as_str()).unwrap_or("Sin Título").to_string();
+            let titulo_original = item["original_title"].as_str().or(item["original_name"].as_str()).map(|s| s.to_string());
+            let fecha_estreno = item["release_date"].as_str().or(item["first_air_date"].as_str()).map(|s| s.to_string());
+
+            if insert_to_catalog(Some(tmdb_id), None, tipo, true, titulo, titulo_original, sinopsis, fecha_estreno, poster_url, generos) {
+                inserted_count += 1;
+            }
+        }
+    }
+    Ok(inserted_count)
+}
+
 async fn fetch_jikan_anime(client: &reqwest::Client, year: i32) -> Result<usize, String> {
     {
         let fallos_lock = JIKAN_FALLOS_RECIENTES.get_or_init(|| Mutex::new(HashMap::new()));
@@ -268,7 +352,7 @@ async fn fetch_jikan_anime(client: &reqwest::Client, year: i32) -> Result<usize,
 
     let mut resp_opt = None;
     for intento in 0..MAX_REINTENTOS {
-        let resp_result = client.get(&url).timeout(std::time::Duration::from_secs(8)).send().await;
+        let resp_result = client.get(&url).timeout(std::time::Duration::from_secs(20)).send().await;
         match resp_result {
             Ok(r) if r.status().is_success() => {
                 resp_opt = Some(r);

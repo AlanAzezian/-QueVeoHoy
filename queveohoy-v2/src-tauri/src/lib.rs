@@ -35,8 +35,8 @@ async fn backfill_metadata_cache() -> Result<tmdb::BackfillReport, String> {
 }
 
 #[tauri::command]
-fn get_recommendation(state: State<'_, DbState>) -> Result<Option<RecomendacionHoy>, String> {
-    db::get_recomendacion_de_hoy(&state).map_err(|e| {
+fn get_recommendation(generos: Option<Vec<String>>, state: State<'_, DbState>) -> Result<Option<RecomendacionHoy>, String> {
+    db::get_recomendacion_de_hoy(&state, generos).map_err(|e| {
         eprintln!("DB ERROR: {:?}", e);
         e.to_string()
     })

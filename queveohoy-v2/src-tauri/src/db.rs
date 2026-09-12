@@ -100,7 +100,7 @@ pub fn init_db() -> Result<()> {
     Ok(())
 }
 
-pub fn get_recomendacion_de_hoy(state: &DbState) -> Result<Option<RecomendacionHoy>> {
+pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -> Result<Option<RecomendacionHoy>> {
     let conn = get_connection()?;
     
     // 1. Verificar cambio de día calendario y resetear omit_clause
@@ -122,20 +122,24 @@ pub fn get_recomendacion_de_hoy(state: &DbState) -> Result<Option<RecomendacionH
         }
     }
 
-    let omitted_en_progreso = state.omitted_en_progreso_session.lock().unwrap();
-    let omitted_en_progreso_list = omitted_en_progreso.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
-    let omit_progreso_clause = if omitted_en_progreso.is_empty() {
-        "".to_string()
-    } else {
-        format!("AND c.id NOT IN ({})", omitted_en_progreso_list)
+    let omit_progreso_clause = {
+        let omitted_en_progreso = state.omitted_en_progreso_session.lock().unwrap();
+        let omitted_en_progreso_list = omitted_en_progreso.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        if omitted_en_progreso.is_empty() {
+            "".to_string()
+        } else {
+            format!("AND c.id NOT IN ({})", omitted_en_progreso_list)
+        }
     };
 
-    let omitted = state.omitted_in_session.lock().unwrap();
-    let omitted_list = omitted.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
-    let omit_clause = if omitted.is_empty() {
-        "".to_string()
-    } else {
-        format!("AND c.id NOT IN ({})", omitted_list)
+    let omit_clause = {
+        let omitted = state.omitted_in_session.lock().unwrap();
+        let omitted_list = omitted.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        if omitted.is_empty() {
+            "".to_string()
+        } else {
+            format!("AND c.id NOT IN ({})", omitted_list)
+        }
     };
 
     // 2. Try to find a series "en progreso"
@@ -177,57 +181,102 @@ pub fn get_recomendacion_de_hoy(state: &DbState) -> Result<Option<RecomendacionH
         return Ok(selected);
     }
 
-    // 2. Fallback to catalogo_offline
-    let mut stmt = conn.prepare(&format!(
-        "SELECT c.id, c.tmdb_id, c.mal_id, c.tipo, c.es_anime, c.titulo, 
-                c.titulo_original, c.poster_url, c.sinopsis, c.fecha_estreno, c.creado_en,
-                (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-24 hours')) as fetch_recently_failed,
-                c.generos
-         FROM catalogo_offline co
-         JOIN contenido c ON co.contenido_id = c.id
-         LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
-         WHERE uc.estado IS NULL {}",
-         omit_clause
-    ))?;
-
-    let mut available_contents = Vec::new();
-    let mut rows = stmt.query([])?;
-    while let Some(row) = rows.next()? {
-        let id: i64 = row.get(0)?;
-        let raw_poster: Option<String> = row.get(7)?;
-        let poster_url = raw_poster.map(|path| {
-            let home_dir = dirs::home_dir()
-                .or_else(|| std::env::var("USERPROFILE").map(PathBuf::from).ok())
-                .unwrap_or_else(|| PathBuf::from(""));
-            let full_path = home_dir.join(".queveohoy").join("cache_posters").join(format!("{}.jpg", id));
-            if full_path.exists() {
-                full_path.to_string_lossy().to_string()
-            } else {
-                format!("https://image.tmdb.org/t/p/w500{}", path)
+    // Helper closure to query available contents
+    let get_available = |conn: &Connection, ignore_omit: bool, active_generos: Option<&Vec<String>>| -> Result<Vec<Contenido>> {
+        let current_omit_clause = if ignore_omit { "".to_string() } else { omit_clause.clone() };
+        let mut stmt = conn.prepare(&format!(
+            "SELECT c.id, c.tmdb_id, c.mal_id, c.tipo, c.es_anime, c.titulo, 
+                    c.titulo_original, c.poster_url, c.sinopsis, c.fecha_estreno, c.creado_en,
+                    (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-24 hours')) as fetch_recently_failed,
+                    c.generos
+             FROM catalogo_offline co
+             JOIN contenido c ON co.contenido_id = c.id
+             LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
+             WHERE uc.estado IS NULL {}",
+             current_omit_clause
+        ))?;
+        
+        let mut results = Vec::new();
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let generos_str: Option<String> = row.get(12).ok().flatten();
+            
+            // Check genres if provided
+            if let Some(target_gens) = active_generos {
+                if !target_gens.is_empty() {
+                    let mut has_match = false;
+                    if let Some(g_str) = &generos_str {
+                        for tg in target_gens {
+                            if g_str.contains(tg) {
+                                has_match = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !has_match {
+                        continue;
+                    }
+                }
             }
-        });
 
-        available_contents.push(Contenido {
-            id: Some(id),
-            tmdb_id: row.get(1)?,
-            mal_id: row.get(2)?,
-            tipo: row.get(3)?,
-            es_anime: row.get::<_, Option<i64>>(4)?.unwrap_or(0) == 1,
-            titulo: row.get(5)?,
-            titulo_original: row.get(6)?,
-            poster_url,
-            sinopsis: row.get(8)?,
-            fecha_estreno: row.get(9)?,
-            creado_en: row.get(10)?,
-            fetch_recently_failed: row.get::<_, Option<i64>>(11).ok().flatten().map(|v| v == 1),
-            generos: row.get::<_, Option<String>>(12).ok().flatten(),
-        });
+            let raw_poster: Option<String> = row.get(7)?;
+            let poster_url = raw_poster.map(|path| {
+                let home_dir = dirs::home_dir()
+                    .or_else(|| std::env::var("USERPROFILE").map(PathBuf::from).ok())
+                    .unwrap_or_else(|| PathBuf::from(""));
+                let full_path = home_dir.join(".queveohoy").join("cache_posters").join(format!("{}.jpg", id));
+                if full_path.exists() {
+                    full_path.to_string_lossy().to_string()
+                } else {
+                    format!("https://image.tmdb.org/t/p/w500{}", path)
+                }
+            });
+
+            results.push(Contenido {
+                id: Some(id),
+                tmdb_id: row.get(1)?,
+                mal_id: row.get(2)?,
+                tipo: row.get(3)?,
+                es_anime: row.get::<_, Option<i64>>(4)?.unwrap_or(0) == 1,
+                titulo: row.get(5)?,
+                titulo_original: row.get(6)?,
+                poster_url,
+                sinopsis: row.get(8)?,
+                fecha_estreno: row.get(9)?,
+                creado_en: row.get(10)?,
+                fetch_recently_failed: row.get::<_, Option<i64>>(11).ok().flatten().map(|v| v == 1),
+                generos: generos_str,
+            });
+        }
+        Ok(results)
+    };
+
+    // 2. Query catalogo_offline with omit and genres
+    let mut available_contents = get_available(&conn, false, generos.as_ref())?;
+
+    // Check sanity: If < 15 virgin contents in DB without genre filter, wake up worker
+    let raw_virgin_count = get_available(&conn, false, None)?.len();
+    if raw_virgin_count < 15 {
+        println!("[DEBUG Hoy] Stock virgen es {} (< 15), despertando worker...", raw_virgin_count);
+        crate::discovery::trigger_discovery();
     }
 
-    println!("Found {} contents in catalogo_offline", available_contents.len());
+    // Fallback 1: Clear omitted_in_session and retry (with genre filter)
+    if available_contents.is_empty() {
+        println!("[DEBUG Hoy] Fallback 1: Catálogo vacío con omitidos, limpiando omitted_in_session...");
+        state.omitted_in_session.lock().unwrap().clear();
+        available_contents = get_available(&conn, true, generos.as_ref())?;
+    }
+
+    // Fallback 2: Ignore genre filter
+    if available_contents.is_empty() {
+        println!("[DEBUG Hoy] Fallback 2: Catálogo aún vacío, ignorando filtro de género...");
+        available_contents = get_available(&conn, true, None)?;
+    }
 
     if available_contents.is_empty() {
-        println!("catalogo_offline está vacío. Devolviendo null para que Frontend muestre 'Buscando...'");
+        println!("[DEBUG Hoy] catalogo_offline está vacío incluso tras los fallbacks. Devolviendo null.");
         return Ok(None);
     }
 
