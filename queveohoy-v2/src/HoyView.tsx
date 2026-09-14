@@ -57,8 +57,6 @@ export const HoyView: React.FC<HoyViewProps> = ({
 
 }) => {
 
-  const fetchingPromisesRef = useRef<Map<number, Promise<string>>>(new Map());
-
   const [isSinopsisOpen, setIsSinopsisOpen] = useState(false);
 
   // Use `recomendacionActiva` for rendering, delay updates when spinning
@@ -437,12 +435,12 @@ export const HoyView: React.FC<HoyViewProps> = ({
     }
   };
 
-  const handleAddProgress = () => {
+  const handleAddProgress = async () => {
     if (!contenido) return;
     try {
       setLocalEstado("en_progreso");
       onUpdateRecomendacion({ estado: "en_progreso" });
-      invoke("update_estado", { contenidoId: contenido.id, nuevoEstado: "en_progreso" }).catch(e => console.error(e));
+      await invoke("update_estado", { contenidoId: contenido.id, nuevoEstado: "en_progreso" }).catch(e => console.error(e));
 
       const prevProgreso = localProgreso;
 
@@ -507,20 +505,8 @@ export const HoyView: React.FC<HoyViewProps> = ({
       setMetadataError("");
       try {
         let newMetaJson = "";
-        if (fetchingPromisesRef.current.has(contenido.id)) {
-          try {
-            newMetaJson = await fetchingPromisesRef.current.get(contenido.id)!;
-          } catch (e: any) {
-            // Ignore if the cached promise rejected, we will poll
-          }
-        }
-        
         let retries = 5;
         let success = false;
-        
-        if (newMetaJson) {
-           success = true;
-        }
 
         while (retries > 0 && !success) {
           try {

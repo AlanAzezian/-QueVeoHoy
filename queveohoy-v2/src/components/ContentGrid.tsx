@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Play, Check, Plus, Edit3, X, Trash2 } from "lucide-react";
 
@@ -90,11 +90,8 @@ export function ContentGrid({ items, onAction, emptyMessage, allowBulkSelection 
           setTimeout(() => reject(new Error("Timeout: La búsqueda de temporadas tardó demasiado")), 15000);
         });
         
-        const fetchPromise = invoke<string>("fetch_and_cache_temporadas", { 
-          contenidoId: currentItem.contenido.id, 
-          tmdbId: currentItem.contenido.tmdb_id || null,
-          malId: currentItem.contenido.mal_id || null,
-          esAnime: currentItem.contenido.es_anime || false
+        const fetchPromise = invoke<string>("fetch_metadata_temporadas", { 
+          id: currentItem.contenido.id
         });
 
         const newMetaJson = await Promise.race([fetchPromise, timeoutPromise]);

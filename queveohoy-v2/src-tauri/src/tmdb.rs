@@ -1,4 +1,4 @@
-﻿use rusqlite::params;
+use rusqlite::params;
 use serde_json::Value;
 use crate::db::get_connection;
 use std::time::Duration;
@@ -13,13 +13,28 @@ fn get_fetch_locks() -> &'static Mutex<HashSet<i64>> {
 }
 
 pub async fn fetch_and_cache_temporadas(contenido_id: i64, tmdb_id: Option<i64>, mal_id: Option<i64>, es_anime: bool) -> Result<String, String> {
-    {
-        let mut locks = get_fetch_locks().lock().unwrap();
-        if locks.contains(&contenido_id) {
-            eprintln!("fetch_in_progress para contenido_id: {}", contenido_id);
+    let mut wait_retries = 30; // 15 seconds
+    loop {
+        {
+            let mut locks = get_fetch_locks().lock().unwrap();
+            if !locks.contains(&contenido_id) {
+                locks.insert(contenido_id);
+                break;
+            }
+        }
+        if wait_retries <= 0 {
+            eprintln!("fetch_in_progress timeout para contenido_id: {}", contenido_id);
             return Err("fetch_in_progress".to_string());
         }
-        locks.insert(contenido_id);
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        wait_retries -= 1;
+        
+        // Si otro hilo ya terminó, la metadata debería estar disponible
+        if let Ok(Some(json)) = crate::db::get_metadata_json(contenido_id) {
+            if json != "{}" {
+                return Ok(json);
+            }
+        }
     }
     
     struct FetchGuard {
