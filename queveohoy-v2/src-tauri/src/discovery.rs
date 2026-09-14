@@ -70,6 +70,16 @@ async fn run_discovery_cycle() -> Result<(), String> {
         .unwrap_or_else(|_| reqwest::Client::new());
 
     loop {
+        match crate::db::prune_catalogo_offline() {
+            Ok(deleted) if deleted > 0 => {
+                eprintln!("Pruning: {} ítems viejos eliminados de catalogo_offline", deleted);
+            }
+            Err(e) => {
+                eprintln!("Error ejecutando prune_catalogo_offline: {}", e);
+            }
+            _ => {}
+        }
+
         let total_real: i64 = {
             let conn = crate::db::get_connection().map_err(|e| e.to_string())?;
             conn.query_row("SELECT COUNT(*) FROM catalogo_offline", [], |r| r.get(0)).unwrap_or(0)

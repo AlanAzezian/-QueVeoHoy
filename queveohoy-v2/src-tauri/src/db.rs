@@ -944,3 +944,18 @@ pub fn get_generos_disponibles_hoy() -> Result<Vec<crate::models::GeneroConteo>>
 
     Ok(result)
 }
+
+pub fn prune_catalogo_offline() -> Result<usize> {
+    let conn = get_connection()?;
+    let rows_affected = conn.execute(
+        "DELETE FROM catalogo_offline
+         WHERE contenido_id IN (
+             SELECT c.contenido_id FROM catalogo_offline c
+             WHERE c.fecha_agregado < datetime('now', '-15 days')
+             AND c.contenido_id NOT IN (SELECT contenido_id FROM usuario_contenido)
+         )",
+        []
+    )?;
+    Ok(rows_affected)
+}
+
