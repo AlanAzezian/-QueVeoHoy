@@ -1,6 +1,28 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MiembroReparto {
+    pub nombre: String,
+    pub personaje: String,
+    pub orden: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProveedorStreaming {
+    pub id: i64,
+    pub nombre: String,
+    pub logo_path: Option<String>,
+    pub tipo: String, // "flatrate" | "rent" | "buy"
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PlataformasStreaming {
+    pub flatrate: Vec<ProveedorStreaming>,
+    pub rent: Vec<ProveedorStreaming>,
+    pub buy: Vec<ProveedorStreaming>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contenido {
     pub id: Option<i64>,
     pub tmdb_id: Option<i64>,
@@ -10,13 +32,24 @@ pub struct Contenido {
     pub titulo: String,
     pub titulo_original: Option<String>,
     pub poster_url: Option<String>,
+    pub backdrop_url: Option<String>,
     pub sinopsis: Option<String>,
     pub fecha_estreno: Option<String>,
     pub creado_en: Option<String>,
     pub fetch_recently_failed: Option<bool>,
     pub generos: Option<String>, // JSON string: ["Acción", "Drama"]
+    pub director: Option<String>,
+    pub creadores: Option<String>, // JSON string: ["Nombre 1", "Nombre 2"]
+    pub reparto: Option<String>, // JSON string: [{"nombre": "...", "personaje": "...", "orden": 0}]
+    pub total_temporadas: Option<i64>,
+    pub plataformas: Option<String>, // JSON string: {"flatrate": [...], "rent": [...], "buy": [...]}
+    pub providers_updated_at: Option<String>,
+    pub status: Option<String>,
+    pub last_air_date: Option<String>, // ISO datetime
+    pub duracion: Option<i64>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UsuarioContenido {
     pub id: Option<i64>,
@@ -51,10 +84,43 @@ pub struct AvanceResultado {
     pub temporada: i64,
     pub episodio: i64,
     pub terminada: bool,
+    pub metadata_temporadas: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GeneroConteo {
     pub nombre: String,
     pub count: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResultadoBusqueda {
+    pub tmdb_id: Option<i64>,
+    pub mal_id: Option<i64>,
+    pub tipo: String, // "MOVIE" | "TV"
+    pub es_anime: bool,
+    pub titulo: String,
+    pub titulo_original: Option<String>,
+    pub poster_url: Option<String>,
+    pub backdrop_url: Option<String>,
+    pub sinopsis: Option<String>,
+    pub fecha_estreno: Option<String>,
+    pub generos: Option<String>, // JSON array string
+    pub ya_en_biblioteca: bool,
+    pub estado_actual: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ObraBusquedaPayload {
+    pub tmdb_id: Option<i64>,
+    pub mal_id: Option<i64>,
+    pub tipo: String,
+    pub es_anime: bool,
+    pub titulo: String,
+    pub titulo_original: Option<String>,
+    pub poster_url: Option<String>,
+    pub backdrop_url: Option<String>,
+    pub sinopsis: Option<String>,
+    pub fecha_estreno: Option<String>,
+    pub generos: Option<String>,
 }

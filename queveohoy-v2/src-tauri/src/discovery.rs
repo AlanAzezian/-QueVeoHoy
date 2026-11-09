@@ -6,8 +6,21 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
+#[allow(dead_code)]
 static JIKAN_FALLOS_RECIENTES: OnceLock<Mutex<HashMap<i32, Instant>>> = OnceLock::new();
+#[allow(dead_code)]
 static ULTIMA_REQUEST_JIKAN: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+
+pub const TMDB_GENRE_MAP: &[(i64, &str)] = &[
+    (28, "Acción"), (12, "Aventura"), (16, "Animación"), (35, "Comedia"),
+    (80, "Crimen"), (99, "Documental"), (18, "Drama"), (10751, "Familia"),
+    (14, "Fantasía"), (36, "Historia"), (27, "Terror"), (10402, "Música"),
+    (9648, "Misterio"), (10749, "Romance"), (878, "Ciencia Ficción"),
+    (10770, "Película de TV"), (53, "Suspenso"), (10752, "Bélico"), (37, "Western"),
+    (10759, "Acción y Aventura"), (10762, "Niños"), (10763, "Noticias"),
+    (10764, "Reality"), (10765, "Sci-Fi y Fantasía"), (10766, "Soap"),
+    (10767, "Talk Show"), (10768, "Guerra y Política"),
+];
 
 pub fn trigger_discovery() {
     tauri::async_runtime::spawn(async {
@@ -63,6 +76,10 @@ pub fn spawn_discovery_worker() {
 
 async fn run_discovery_cycle() -> Result<(), String> {
     dotenvy::dotenv().ok();
+    let cache_dir = crate::db::get_cache_posters_dir();
+    if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+        eprintln!("[Worker] Advertencia: no se pudo crear directorio de caché de pósters {:?}: {}", cache_dir, e);
+    }
     let tmdb_api_key = std::env::var("TMDB_API_KEY").unwrap_or_else(|_| "239957e2e77a70d1dd415586f3f551b0".to_string());
     let client = reqwest::Client::builder()
         .user_agent("QueVeoHoy/2.0 (https://github.com/alan/queveohoy)")
@@ -130,7 +147,7 @@ async fn run_discovery_cycle() -> Result<(), String> {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
     
-    Ok(())
+
 }
 
 async fn fetch_tmdb_discover(client: &reqwest::Client, api_key: &str, media_type: &str, year: i32) -> Result<usize, String> {
@@ -235,7 +252,18 @@ async fn fetch_tmdb_discover(client: &reqwest::Client, api_key: &str, media_type
             let titulo_original = item["original_title"].as_str().or(item["original_name"].as_str()).map(|s| s.to_string());
             let fecha_estreno = item["release_date"].as_str().or(item["first_air_date"].as_str()).map(|s| s.to_string());
 
-            if insert_to_catalog(Some(tmdb_id), None, tipo, es_anime, titulo, titulo_original, sinopsis, fecha_estreno, poster_url, generos) {
+            let backdrop_path = item["backdrop_path"].as_str().map(|s| s.trim()).filter(|s| !s.is_empty());
+            let backdrop_url = backdrop_path.map(|bp| {
+                if bp.starts_with("http://") || bp.starts_with("https://") {
+                    bp.to_string()
+                } else if bp.starts_with('/') {
+                    format!("https://image.tmdb.org/t/p/w1280{}", bp)
+                } else {
+                    format!("https://image.tmdb.org/t/p/w1280/{}", bp)
+                }
+            });
+
+            if insert_to_catalog(client, Some(tmdb_id), None, tipo, es_anime, titulo, titulo_original, sinopsis, fecha_estreno, poster_url, generos, backdrop_url).await {
                 inserted_count += 1;
             }
         }
@@ -308,7 +336,18 @@ async fn fetch_tmdb_anime(client: &reqwest::Client, api_key: &str, year: i32) ->
             let titulo_original = item["original_title"].as_str().or(item["original_name"].as_str()).map(|s| s.to_string());
             let fecha_estreno = item["release_date"].as_str().or(item["first_air_date"].as_str()).map(|s| s.to_string());
 
-            if insert_to_catalog(Some(tmdb_id), None, tipo, true, titulo, titulo_original, sinopsis, fecha_estreno, poster_url, generos) {
+            let backdrop_path = item["backdrop_path"].as_str().map(|s| s.trim()).filter(|s| !s.is_empty());
+            let backdrop_url = backdrop_path.map(|bp| {
+                if bp.starts_with("http://") || bp.starts_with("https://") {
+                    bp.to_string()
+                } else if bp.starts_with('/') {
+                    format!("https://image.tmdb.org/t/p/w1280{}", bp)
+                } else {
+                    format!("https://image.tmdb.org/t/p/w1280/{}", bp)
+                }
+            });
+
+            if insert_to_catalog(client, Some(tmdb_id), None, tipo, true, titulo, titulo_original, sinopsis, fecha_estreno, poster_url, generos, backdrop_url).await {
                 inserted_count += 1;
             }
         }
@@ -316,6 +355,7 @@ async fn fetch_tmdb_anime(client: &reqwest::Client, api_key: &str, year: i32) ->
     Ok(inserted_count)
 }
 
+#[allow(dead_code)]
 async fn fetch_jikan_anime(client: &reqwest::Client, year: i32) -> Result<usize, String> {
     {
         let fallos_lock = JIKAN_FALLOS_RECIENTES.get_or_init(|| Mutex::new(HashMap::new()));
@@ -449,7 +489,7 @@ async fn fetch_jikan_anime(client: &reqwest::Client, year: i32) -> Result<usize,
                 if nombres.is_empty() { None } else { Some(format!("[{}]", nombres.join(","))) }
             } else { None };
 
-            if insert_to_catalog(None, Some(mal_id), tipo, true, titulo, titulo_original, sinopsis, fecha_estreno, poster_url, generos) {
+            if insert_to_catalog(client, None, Some(mal_id), tipo, true, titulo, titulo_original, sinopsis, fecha_estreno, poster_url, generos, None).await {
                 inserted_count += 1;
             }
         }
@@ -457,7 +497,8 @@ async fn fetch_jikan_anime(client: &reqwest::Client, year: i32) -> Result<usize,
     Ok(inserted_count)
 }
 
-fn insert_to_catalog(
+async fn insert_to_catalog(
+    client: &reqwest::Client,
     tmdb_id: Option<i64>, 
     mal_id: Option<i64>, 
     tipo: &str, 
@@ -468,7 +509,11 @@ fn insert_to_catalog(
     fecha_estreno: Option<String>,
     poster_url: Option<String>,
     generos: Option<String>,
+    backdrop_url: Option<String>,
 ) -> bool {
+    let mut inserted = false;
+    let mut resolved_id: Option<i64> = None;
+
     if let Ok(conn) = get_connection() {
         let exists: Option<i64> = conn.query_row(
             "SELECT id FROM contenido WHERE (tmdb_id = ?1 AND tmdb_id IS NOT NULL) OR (mal_id = ?2 AND mal_id IS NOT NULL)",
@@ -482,12 +527,18 @@ fn insert_to_catalog(
                 "UPDATE contenido SET generos = ?1 WHERE id = ?2 AND (generos IS NULL OR generos = '')",
                 params![generos, id]
             );
+            if let Some(b_url) = &backdrop_url {
+                let _ = conn.execute(
+                    "UPDATE contenido SET backdrop_url = ?1 WHERE id = ?2 AND (backdrop_url IS NULL OR backdrop_url = '')",
+                    params![b_url, id]
+                );
+            }
             id
         } else {
             let res = conn.execute(
-                "INSERT INTO contenido (tmdb_id, mal_id, tipo, es_anime, titulo, titulo_original, sinopsis, fecha_estreno, poster_url, generos)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![tmdb_id, mal_id, tipo, if es_anime { 1 } else { 0 }, titulo, titulo_original, sinopsis, fecha_estreno, poster_url, generos]
+                "INSERT INTO contenido (tmdb_id, mal_id, tipo, es_anime, titulo, titulo_original, sinopsis, fecha_estreno, poster_url, generos, backdrop_url)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![tmdb_id, mal_id, tipo, if es_anime { 1 } else { 0 }, titulo, titulo_original, sinopsis, fecha_estreno, poster_url.as_deref(), generos, backdrop_url.as_deref()]
             );
             if let Ok(_) = res {
                 conn.last_insert_rowid()
@@ -496,10 +547,85 @@ fn insert_to_catalog(
             }
         };
 
+        resolved_id = Some(contenido_id);
         let res = conn.execute("INSERT OR IGNORE INTO catalogo_offline (contenido_id) VALUES (?1)", params![contenido_id]);
         if res.is_ok() && res.unwrap() > 0 {
-            return true;
+            inserted = true;
         }
     }
-    false
+    if let (Some(contenido_id), Some(raw_poster)) = (resolved_id, poster_url.as_deref()) {
+        let remote_url = if raw_poster.starts_with("http://") || raw_poster.starts_with("https://") {
+            raw_poster.to_string()
+        } else if raw_poster.starts_with('/') {
+            format!("https://image.tmdb.org/t/p/w500{}", raw_poster)
+        } else {
+            String::new()
+        };
+
+        if remote_url.contains("image.tmdb.org") || remote_url.starts_with("https://") || remote_url.starts_with("http://") {
+            cache_poster_image(client, contenido_id, &remote_url).await;
+        }
+    }
+
+    inserted
+}
+
+pub async fn cache_poster_image(client: &reqwest::Client, contenido_id: i64, url: &str) {
+    let cache_dir = crate::db::get_cache_posters_dir();
+    if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+        eprintln!("[Worker] Advertencia: no se pudo crear directorio de caché {:?}: {}", cache_dir, e);
+        return;
+    }
+
+    let poster_path = cache_dir.join(format!("{}.jpg", contenido_id));
+    if poster_path.exists() {
+        return;
+    }
+
+    let resp = match client
+        .get(url)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[Worker] Advertencia: fallo de red al descargar póster {} ({}): {}", contenido_id, url, e);
+            return;
+        }
+    };
+
+    if !resp.status().is_success() {
+        eprintln!(
+            "[Worker] Advertencia: HTTP status {} al descargar póster {} ({})",
+            resp.status(),
+            contenido_id,
+            url
+        );
+        return;
+    }
+
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[Worker] Advertencia: error leyendo bytes del póster {} ({}): {}", contenido_id, url, e);
+            return;
+        }
+    };
+
+    let tmp_path = cache_dir.join(format!("{}.jpg.tmp", contenido_id));
+    match std::fs::write(&tmp_path, &bytes) {
+        Ok(_) => {
+            if let Err(e) = std::fs::rename(&tmp_path, &poster_path) {
+                eprintln!("[Worker] Advertencia: fallo en rename atómico de póster {:?}, intentando escritura directa: {}", poster_path, e);
+                let _ = std::fs::remove_file(&tmp_path);
+                if let Err(write_err) = std::fs::write(&poster_path, &bytes) {
+                    eprintln!("[Worker] Advertencia: fallo al escribir póster en disco {:?}: {}", poster_path, write_err);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("[Worker] Advertencia: fallo al escribir archivo temporal de póster {:?}: {}", tmp_path, e);
+        }
+    }
 }

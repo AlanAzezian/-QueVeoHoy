@@ -2,7 +2,7 @@ use rusqlite::{Connection, Result, params};
 
 pub const DIAS_EXCLUSION_SKIP: i64 = 10;
 use std::path::PathBuf;
-use crate::models::{Contenido, UsuarioContenido, ProgresoSerie, RecomendacionHoy};
+use crate::models::{Contenido, ProgresoSerie, RecomendacionHoy, ObraBusquedaPayload};
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -19,6 +19,14 @@ pub fn get_db_path() -> PathBuf {
         .expect("Could not find home directory");
     
     home_dir.join(".queveohoy.db")
+}
+
+pub fn get_cache_posters_dir() -> PathBuf {
+    let home_dir = dirs::home_dir()
+        .or_else(|| std::env::var("USERPROFILE").map(PathBuf::from).ok())
+        .unwrap_or_else(|| PathBuf::from(""));
+
+    home_dir.join(".queveohoy").join("cache_posters")
 }
 
 pub fn get_connection() -> Result<Connection> {
@@ -39,10 +47,31 @@ pub fn init_db() -> Result<()> {
     let mut rows = stmt.query([])?;
     let mut has_error_col = false;
     let mut has_generos_col = false;
+    let mut has_backdrop_col = false;
+    let mut has_director_col = false;
+    let mut has_creadores_col = false;
+    let mut has_reparto_col = false;
+    let mut has_total_temporadas_col = false;
+    let mut has_plataformas_col = false;
+    let mut has_providers_updated_at_col = false;
+    let mut has_status_col = false;
+    let mut has_last_air_date_col = false;
+    let mut has_duracion_col = false;
+
     while let Some(row) = rows.next()? {
         let name: String = row.get(1)?;
         if name == "last_metadata_fetch_error" { has_error_col = true; }
         if name == "generos" { has_generos_col = true; }
+        if name == "backdrop_url" { has_backdrop_col = true; }
+        if name == "director" { has_director_col = true; }
+        if name == "creadores" { has_creadores_col = true; }
+        if name == "reparto" { has_reparto_col = true; }
+        if name == "total_temporadas" { has_total_temporadas_col = true; }
+        if name == "plataformas" { has_plataformas_col = true; }
+        if name == "providers_updated_at" { has_providers_updated_at_col = true; }
+        if name == "status" { has_status_col = true; }
+        if name == "last_air_date" { has_last_air_date_col = true; }
+        if name == "duracion" { has_duracion_col = true; }
     }
 
     // Migración segura — last_metadata_fetch_error
@@ -55,6 +84,49 @@ pub fn init_db() -> Result<()> {
     if !has_generos_col {
         println!("Ejecutando migración: agregando generos a contenido...");
         let _ = conn.execute("ALTER TABLE contenido ADD COLUMN generos TEXT", []);
+    }
+
+    // Migración segura — backdrop_url
+    if !has_backdrop_col {
+        let _ = conn.execute("ALTER TABLE contenido ADD COLUMN backdrop_url TEXT", []);
+    }
+
+    // Migración segura — director, creadores, reparto, total_temporadas, plataformas, providers_updated_at
+    if !has_director_col {
+        println!("Ejecutando migración: agregando director a contenido...");
+        let _ = conn.execute("ALTER TABLE contenido ADD COLUMN director TEXT", []);
+    }
+    if !has_creadores_col {
+        println!("Ejecutando migración: agregando creadores a contenido...");
+        let _ = conn.execute("ALTER TABLE contenido ADD COLUMN creadores TEXT", []);
+    }
+    if !has_reparto_col {
+        println!("Ejecutando migración: agregando reparto a contenido...");
+        let _ = conn.execute("ALTER TABLE contenido ADD COLUMN reparto TEXT", []);
+    }
+    if !has_total_temporadas_col {
+        println!("Ejecutando migración: agregando total_temporadas a contenido...");
+        let _ = conn.execute("ALTER TABLE contenido ADD COLUMN total_temporadas INTEGER", []);
+    }
+    if !has_plataformas_col {
+        println!("Ejecutando migración: agregando plataformas a contenido...");
+        let _ = conn.execute("ALTER TABLE contenido ADD COLUMN plataformas TEXT", []);
+    }
+    if !has_providers_updated_at_col {
+        println!("Ejecutando migración: agregando providers_updated_at a contenido...");
+        let _ = conn.execute("ALTER TABLE contenido ADD COLUMN providers_updated_at TEXT", []);
+    }
+    if !has_status_col {
+        println!("Ejecutando migración: agregando status a contenido...");
+        let _ = conn.execute("ALTER TABLE contenido ADD COLUMN status TEXT", []);
+    }
+    if !has_last_air_date_col {
+        println!("Ejecutando migración: agregando last_air_date a contenido...");
+        let _ = conn.execute("ALTER TABLE contenido ADD COLUMN last_air_date TEXT", []);
+    }
+    if !has_duracion_col {
+        println!("Ejecutando migración: agregando duracion a contenido...");
+        let _ = conn.execute("ALTER TABLE contenido ADD COLUMN duracion INTEGER", []);
     }
 
     // Purga controlada para forzar el rellenado de géneros en offline
@@ -149,8 +221,18 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
                 uc.id as uc_id, uc.estado,
                 ps.id as ps_id, ps.temporada_actual, ps.episodio_actual, ps.episodio_absoluto_actual,
                 tm.temporadas_json,
-                (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-24 hours')) as fetch_recently_failed,
-                c.generos
+                (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-12 hours')) as fetch_recently_failed,
+                c.generos,
+                c.backdrop_url,
+                c.director,
+                c.creadores,
+                c.reparto,
+                c.total_temporadas,
+                c.plataformas,
+                c.providers_updated_at,
+                c.status,
+                c.last_air_date,
+                c.duracion
          FROM contenido c
          JOIN usuario_contenido uc ON c.id = uc.contenido_id
          LEFT JOIN progreso_serie ps ON uc.id = ps.usuario_contenido_id
@@ -177,6 +259,22 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
     if !in_progress_contents.is_empty() {
         let mut rng = rand::thread_rng();
         let selected = in_progress_contents.choose(&mut rng).cloned();
+        if let Some(ref sel) = selected {
+            if let Some(cid) = sel.contenido.id {
+                let should_enrich = sel.contenido.tmdb_id.is_some()
+                    && sel.contenido.fetch_recently_failed != Some(true)
+                    && (
+                        sel.contenido.providers_updated_at.is_none()
+                        || (sel.contenido.tipo == "MOVIE" && sel.contenido.duracion.is_none())
+                        || (sel.contenido.tipo != "MOVIE" && sel.contenido.status.is_none())
+                    );
+                if should_enrich {
+                    tauri::async_runtime::spawn(async move {
+                        let _ = crate::tmdb::fetch_and_apply_enrichment(cid).await;
+                    });
+                }
+            }
+        }
         println!("[DEBUG Hoy] Recomendación encontrada en_progreso: {:?}", selected);
         return Ok(selected);
     }
@@ -187,8 +285,18 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
         let mut stmt = conn.prepare(&format!(
             "SELECT c.id, c.tmdb_id, c.mal_id, c.tipo, c.es_anime, c.titulo, 
                     c.titulo_original, c.poster_url, c.sinopsis, c.fecha_estreno, c.creado_en,
-                    (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-24 hours')) as fetch_recently_failed,
-                    c.generos
+                    (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-12 hours')) as fetch_recently_failed,
+                    c.generos,
+                    c.backdrop_url,
+                    c.director,
+                    c.creadores,
+                    c.reparto,
+                    c.total_temporadas,
+                    c.plataformas,
+                    c.providers_updated_at,
+                    c.status,
+                    c.last_air_date,
+                    c.duracion
              FROM catalogo_offline co
              JOIN contenido c ON co.contenido_id = c.id
              LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
@@ -201,6 +309,16 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
         while let Some(row) = rows.next()? {
             let id: i64 = row.get(0)?;
             let generos_str: Option<String> = row.get(12).ok().flatten();
+            let backdrop_url: Option<String> = row.get::<_, Option<String>>(13).ok().flatten();
+            let director: Option<String> = row.get::<_, Option<String>>(14).ok().flatten();
+            let creadores: Option<String> = row.get::<_, Option<String>>(15).ok().flatten();
+            let reparto: Option<String> = row.get::<_, Option<String>>(16).ok().flatten();
+            let total_temporadas: Option<i64> = row.get::<_, Option<i64>>(17).ok().flatten();
+            let plataformas: Option<String> = row.get::<_, Option<String>>(18).ok().flatten();
+            let providers_updated_at: Option<String> = row.get::<_, Option<String>>(19).ok().flatten();
+            let status: Option<String> = row.get::<_, Option<String>>(20).ok().flatten();
+            let last_air_date: Option<String> = row.get::<_, Option<String>>(21).ok().flatten();
+            let duracion: Option<i64> = row.get::<_, Option<i64>>(22).ok().flatten();
             
             // Check genres if provided
             if let Some(target_gens) = active_generos {
@@ -242,11 +360,21 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
                 titulo: row.get(5)?,
                 titulo_original: row.get(6)?,
                 poster_url,
+                backdrop_url,
                 sinopsis: row.get(8)?,
                 fecha_estreno: row.get(9)?,
                 creado_en: row.get(10)?,
                 fetch_recently_failed: row.get::<_, Option<i64>>(11).ok().flatten().map(|v| v == 1),
                 generos: generos_str,
+                director,
+                creadores,
+                reparto,
+                total_temporadas,
+                plataformas,
+                providers_updated_at,
+                status,
+                last_air_date,
+                duracion,
             });
         }
         Ok(results)
@@ -284,10 +412,26 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
     let mut rng = rand::thread_rng();
     let selected = available_contents.choose(&mut rng).cloned();
     
-    let res = selected.map(|c| RecomendacionHoy {
-        contenido: c,
-        estado: None,
-        progreso: None,
+    let res = selected.map(|c| {
+        if let Some(cid) = c.id {
+            let should_enrich = c.tmdb_id.is_some()
+                && c.fetch_recently_failed != Some(true)
+                && (
+                    c.providers_updated_at.is_none()
+                    || (c.tipo == "MOVIE" && c.duracion.is_none())
+                    || (c.tipo != "MOVIE" && c.status.is_none())
+                );
+            if should_enrich {
+                tauri::async_runtime::spawn(async move {
+                    let _ = crate::tmdb::fetch_and_apply_enrichment(cid).await;
+                });
+            }
+        }
+        RecomendacionHoy {
+            contenido: c,
+            estado: None,
+            progreso: None,
+        }
     });
     println!("[DEBUG Hoy] Recomendación encontrada en catalogo_offline: {:?}", res);
     Ok(res)
@@ -317,11 +461,21 @@ fn map_recomendacion(row: &rusqlite::Row) -> rusqlite::Result<RecomendacionHoy> 
         titulo: row.get(5)?,
         titulo_original: row.get(6)?,
         poster_url,
+        backdrop_url: row.get::<usize, Option<String>>(20).ok().flatten(),
         sinopsis: row.get(8)?,
         fecha_estreno: row.get(9)?,
         creado_en: row.get(10)?,
         fetch_recently_failed: row.get::<usize, Option<i64>>(18).ok().flatten().map(|v| v == 1),
         generos: row.get::<usize, Option<String>>(19).ok().flatten(),
+        director: row.get::<usize, Option<String>>(21).ok().flatten(),
+        creadores: row.get::<usize, Option<String>>(22).ok().flatten(),
+        reparto: row.get::<usize, Option<String>>(23).ok().flatten(),
+        total_temporadas: row.get::<usize, Option<i64>>(24).ok().flatten(),
+        plataformas: row.get::<usize, Option<String>>(25).ok().flatten(),
+        providers_updated_at: row.get::<usize, Option<String>>(26).ok().flatten(),
+        status: row.get::<usize, Option<String>>(27).ok().flatten(),
+        last_air_date: row.get::<usize, Option<String>>(28).ok().flatten(),
+        duracion: row.get::<usize, Option<i64>>(29).ok().flatten(),
     };
     
     let uc_id: i64 = row.get(11)?;
@@ -356,8 +510,18 @@ pub fn get_en_progreso() -> Result<Vec<RecomendacionHoy>> {
                 uc.id as uc_id, uc.estado,
                 ps.id as ps_id, ps.temporada_actual, ps.episodio_actual, ps.episodio_absoluto_actual,
                 tm.temporadas_json,
-                (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-24 hours')) as fetch_recently_failed,
-                c.generos
+                (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-12 hours')) as fetch_recently_failed,
+                c.generos,
+                c.backdrop_url,
+                c.director,
+                c.creadores,
+                c.reparto,
+                c.total_temporadas,
+                c.plataformas,
+                c.providers_updated_at,
+                c.status,
+                c.last_air_date,
+                c.duracion
          FROM contenido c
          JOIN usuario_contenido uc ON c.id = uc.contenido_id
          LEFT JOIN progreso_serie ps ON uc.id = ps.usuario_contenido_id
@@ -391,8 +555,18 @@ pub fn get_biblioteca() -> Result<Vec<RecomendacionHoy>> {
                 uc.id as uc_id, uc.estado,
                 ps.id as ps_id, ps.temporada_actual, ps.episodio_actual, ps.episodio_absoluto_actual,
                 tm.temporadas_json,
-                (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-24 hours')) as fetch_recently_failed,
-                c.generos
+                (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-12 hours')) as fetch_recently_failed,
+                c.generos,
+                c.backdrop_url,
+                c.director,
+                c.creadores,
+                c.reparto,
+                c.total_temporadas,
+                c.plataformas,
+                c.providers_updated_at,
+                c.status,
+                c.last_air_date,
+                c.duracion
          FROM contenido c
          JOIN usuario_contenido uc ON c.id = uc.contenido_id
          LEFT JOIN progreso_serie ps ON uc.id = ps.usuario_contenido_id
@@ -425,8 +599,18 @@ pub fn get_terminadas() -> Result<Vec<RecomendacionHoy>> {
                 uc.id as uc_id, uc.estado,
                 ps.id as ps_id, ps.temporada_actual, ps.episodio_actual, ps.episodio_absoluto_actual,
                 tm.temporadas_json,
-                (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-24 hours')) as fetch_recently_failed,
-                c.generos
+                (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-12 hours')) as fetch_recently_failed,
+                c.generos,
+                c.backdrop_url,
+                c.director,
+                c.creadores,
+                c.reparto,
+                c.total_temporadas,
+                c.plataformas,
+                c.providers_updated_at,
+                c.status,
+                c.last_air_date,
+                c.duracion
          FROM contenido c
          JOIN usuario_contenido uc ON c.id = uc.contenido_id
          LEFT JOIN progreso_serie ps ON uc.id = ps.usuario_contenido_id
@@ -458,7 +642,18 @@ pub fn get_historial() -> Result<Vec<RecomendacionHoy>> {
                 c.titulo_original, c.poster_url, c.sinopsis, c.fecha_estreno, hr.fecha,
                 COALESCE(uc.id, 0) as uc_id, hr.accion,
                 ps.id as ps_id, ps.temporada_actual, ps.episodio_actual, ps.episodio_absoluto_actual,
-                tm.temporadas_json
+                tm.temporadas_json,
+                (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-12 hours')) as fetch_recently_failed,
+                c.generos,
+                c.backdrop_url,
+                c.director,
+                c.creadores,
+                c.reparto,
+                c.total_temporadas,
+                c.plataformas,
+                c.providers_updated_at,
+                c.status,
+                c.last_air_date
          FROM (
              SELECT contenido_id, accion, MAX(fecha) as fecha
              FROM historial_recomendaciones
@@ -743,7 +938,7 @@ pub fn avanzar_episodio(contenido_id: i64) -> Result<crate::models::AvanceResult
     if tipo != "TV" && !es_anime {
         let is_terminada = internal_actualizar_progreso(&tx, contenido_id, temp_actual, ep_actual + 1, "EMPEZAR_EN_PROGRESO")?;
         tx.commit()?;
-        return Ok(crate::models::AvanceResultado { temporada: temp_actual, episodio: ep_actual + 1, terminada: is_terminada });
+        return Ok(crate::models::AvanceResultado { temporada: temp_actual, episodio: ep_actual + 1, terminada: is_terminada, metadata_temporadas: None });
     }
 
     let logged_action = "EMPEZAR_EN_PROGRESO";
@@ -784,11 +979,23 @@ pub fn avanzar_episodio(contenido_id: i64) -> Result<crate::models::AvanceResult
         is_terminada = internal_actualizar_progreso(&tx, contenido_id, temp_actual, ep_actual, logged_action)?;
     }
 
+    let metadata_temporadas: Option<String> = tx.query_row(
+        "SELECT json_group_object(
+            CAST(tt.season_number AS TEXT),
+            (SELECT COUNT(*) FROM tv_episodios te WHERE te.temporada_id = tt.id)
+         )
+         FROM tv_temporadas tt
+         WHERE tt.contenido_id = ?1",
+        params![contenido_id],
+        |row| row.get(0)
+    ).ok();
     tx.commit()?;
+
     Ok(crate::models::AvanceResultado {
         temporada: temp_actual,
         episodio: ep_actual,
-        terminada: is_terminada
+        terminada: is_terminada,
+        metadata_temporadas
     })
 }
 
@@ -947,6 +1154,17 @@ pub fn get_generos_disponibles_hoy() -> Result<Vec<crate::models::GeneroConteo>>
 
 pub fn prune_catalogo_offline() -> Result<usize> {
     let conn = get_connection()?;
+    let mut stmt = conn.prepare(
+        "SELECT c.contenido_id FROM catalogo_offline c
+         WHERE c.fecha_agregado < datetime('now', '-15 days')
+         AND c.contenido_id NOT IN (SELECT contenido_id FROM usuario_contenido)"
+    )?;
+    let ids_to_prune: Vec<i64> = stmt
+        .query_map([], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+
     let rows_affected = conn.execute(
         "DELETE FROM catalogo_offline
          WHERE contenido_id IN (
@@ -956,6 +1174,283 @@ pub fn prune_catalogo_offline() -> Result<usize> {
          )",
         []
     )?;
+
+    if !ids_to_prune.is_empty() {
+        let cache_dir = get_cache_posters_dir();
+        for id in ids_to_prune {
+            let referenced: bool = conn
+                .query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM catalogo_offline WHERE contenido_id = ?1
+                        UNION ALL
+                        SELECT 1 FROM usuario_contenido WHERE contenido_id = ?1
+                    )",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+
+            if !referenced {
+                let poster_path = cache_dir.join(format!("{}.jpg", id));
+                if poster_path.exists() {
+                    if let Err(e) = std::fs::remove_file(&poster_path) {
+                        eprintln!("[GC] Advertencia: no se pudo eliminar póster huérfano {:?}: {}", poster_path, e);
+                    }
+                }
+            }
+        }
+    }
+
     Ok(rows_affected)
 }
+
+pub fn get_recomendacion_by_contenido_id(contenido_id: i64) -> Result<RecomendacionHoy> {
+    let conn = get_connection()?;
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.tmdb_id, c.mal_id, c.tipo, c.es_anime, c.titulo, 
+                c.titulo_original, c.poster_url, c.sinopsis, c.fecha_estreno, c.creado_en,
+                uc.id as uc_id, uc.estado,
+                ps.id as ps_id, ps.temporada_actual, ps.episodio_actual, ps.episodio_absoluto_actual,
+                tm.temporadas_json,
+                (c.last_metadata_fetch_error IS NOT NULL AND c.last_metadata_fetch_error > datetime('now', 'localtime', '-12 hours')) as fetch_recently_failed,
+                c.generos,
+                c.backdrop_url,
+                c.director,
+                c.creadores,
+                c.reparto,
+                c.total_temporadas,
+                c.plataformas,
+                c.providers_updated_at,
+                c.status,
+                c.last_air_date,
+                c.duracion
+         FROM contenido c
+         JOIN usuario_contenido uc ON c.id = uc.contenido_id
+         LEFT JOIN progreso_serie ps ON uc.id = ps.usuario_contenido_id
+         LEFT JOIN (
+            SELECT tt.contenido_id,
+                   json_group_object(
+                       CAST(tt.season_number AS TEXT),
+                       (SELECT COUNT(*) FROM tv_episodios te WHERE te.temporada_id = tt.id)
+                   ) as temporadas_json
+            FROM tv_temporadas tt
+            GROUP BY tt.contenido_id
+         ) tm ON c.id = tm.contenido_id
+         WHERE c.id = ?1"
+    )?;
+    stmt.query_row(params![contenido_id], map_recomendacion)
+}
+
+pub async fn guardar_obra_busqueda(obra: ObraBusquedaPayload, estado: String) -> std::result::Result<RecomendacionHoy, String> {
+    let contenido_id = {
+        let mut conn = get_connection().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        let existing_id: Option<i64> = tx.query_row(
+            "SELECT id FROM contenido WHERE (?1 IS NOT NULL AND tmdb_id = ?1) OR (?2 IS NOT NULL AND mal_id = ?2) LIMIT 1",
+            params![obra.tmdb_id, obra.mal_id],
+            |row| row.get(0)
+        ).ok();
+
+        let id = match existing_id {
+            Some(cid) => {
+                if let Some(gens) = &obra.generos {
+                    let _ = tx.execute(
+                        "UPDATE contenido SET generos = ?1 WHERE id = ?2 AND (generos IS NULL OR generos = '')",
+                        params![gens, cid]
+                    );
+                }
+                if let Some(b_url) = &obra.backdrop_url {
+                    let _ = tx.execute(
+                        "UPDATE contenido SET backdrop_url = ?1 WHERE id = ?2 AND (backdrop_url IS NULL OR backdrop_url = '')",
+                        params![b_url, cid]
+                    );
+                }
+                cid
+            }
+            None => {
+                tx.execute(
+                    "INSERT INTO contenido (tmdb_id, mal_id, tipo, es_anime, titulo, titulo_original, sinopsis, fecha_estreno, poster_url, generos, backdrop_url)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    params![
+                        obra.tmdb_id,
+                        obra.mal_id,
+                        obra.tipo,
+                        if obra.es_anime { 1 } else { 0 },
+                        obra.titulo,
+                        obra.titulo_original,
+                        obra.sinopsis,
+                        obra.fecha_estreno,
+                        obra.poster_url,
+                        obra.generos,
+                        obra.backdrop_url
+                    ]
+                ).map_err(|e| format!("Error al insertar contenido: {}", e))?;
+                tx.last_insert_rowid()
+            }
+        };
+
+        let uc_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM usuario_contenido WHERE contenido_id = ?1)",
+            params![id],
+            |row| row.get(0)
+        ).unwrap_or(false);
+
+        if uc_exists {
+            if estado == "terminada" {
+                tx.execute(
+                    "UPDATE usuario_contenido SET estado = ?1, fecha_finalizacion = datetime('now', 'localtime') WHERE contenido_id = ?2",
+                    params![estado, id]
+                ).map_err(|e| format!("Error actualizando usuario_contenido: {}", e))?;
+            } else {
+                tx.execute(
+                    "UPDATE usuario_contenido SET estado = ?1, fecha_inicio = datetime('now', 'localtime') WHERE contenido_id = ?2",
+                    params![estado, id]
+                ).map_err(|e| format!("Error actualizando usuario_contenido: {}", e))?;
+            }
+        } else {
+            if estado == "terminada" {
+                tx.execute(
+                    "INSERT INTO usuario_contenido (contenido_id, estado, fecha_finalizacion) VALUES (?1, ?2, datetime('now', 'localtime'))",
+                    params![id, estado]
+                ).map_err(|e| format!("Error insertando usuario_contenido: {}", e))?;
+            } else {
+                tx.execute(
+                    "INSERT INTO usuario_contenido (contenido_id, estado, fecha_inicio) VALUES (?1, ?2, datetime('now', 'localtime'))",
+                    params![id, estado]
+                ).map_err(|e| format!("Error insertando usuario_contenido: {}", e))?;
+            }
+        }
+
+        if estado == "en_progreso" && (obra.tipo == "TV" || obra.es_anime) {
+            let uc_id: i64 = tx.query_row(
+                "SELECT id FROM usuario_contenido WHERE contenido_id = ?1",
+                params![id],
+                |row| row.get(0)
+            ).map_err(|e| format!("Error obteniendo uc_id: {}", e))?;
+
+            let mut stmt = tx.prepare("SELECT id FROM progreso_serie WHERE usuario_contenido_id = ?1")
+                .map_err(|e| format!("Error preparando select progreso_serie: {}", e))?;
+            let has_ps = stmt.exists(params![uc_id])
+                .map_err(|e| format!("Error comprobando existencia en progreso_serie: {}", e))?;
+            drop(stmt);
+
+            if !has_ps {
+                tx.execute(
+                    "INSERT INTO progreso_serie (usuario_contenido_id, temporada_actual, episodio_actual, episodio_absoluto_actual) VALUES (?1, 1, 1, 1)",
+                    params![uc_id]
+                ).map_err(|e| format!("Error insertando progreso_serie: {}", e))?;
+            }
+        }
+
+        let accion = match estado.as_str() {
+            "terminada" => "YA_LA_VI",
+            "pendiente" => "PARA_DESPUES",
+            "en_progreso" => "EMPEZAR_EN_PROGRESO",
+            "abandonada" => "ABANDONADA",
+            _ => "EMPEZAR_EN_PROGRESO"
+        };
+
+        tx.execute(
+            "INSERT INTO historial_recomendaciones (contenido_id, fecha, accion, veces_mostrada)
+             VALUES (?1, datetime('now', 'localtime'), ?2, 1)
+             ON CONFLICT(contenido_id) DO UPDATE SET
+                fecha = datetime('now', 'localtime'),
+                accion = excluded.accion,
+                veces_mostrada = historial_recomendaciones.veces_mostrada + 1",
+            params![id, accion]
+        ).map_err(|e| format!("Error registrando en historial_recomendaciones: {}", e))?;
+
+        tx.commit().map_err(|e| format!("Error commit transacción: {}", e))?;
+        id
+    };
+
+    if let Some(poster) = &obra.poster_url {
+        let remote_url = if poster.starts_with("http://") || poster.starts_with("https://") {
+            poster.clone()
+        } else if poster.starts_with('/') {
+            format!("https://image.tmdb.org/t/p/w500{}", poster)
+        } else {
+            String::new()
+        };
+
+        if !remote_url.is_empty() {
+            let cid = contenido_id;
+            tauri::async_runtime::spawn(async move {
+                let client = reqwest::Client::builder()
+                    .user_agent("QueVeoHoy/2.0 (https://github.com/alan/queveohoy)")
+                    .build()
+                    .unwrap_or_else(|_| reqwest::Client::new());
+                crate::discovery::cache_poster_image(&client, cid, &remote_url).await;
+            });
+        }
+    }
+
+    if estado == "en_progreso" && (obra.tipo == "TV" || obra.es_anime) {
+        let tmdb_id = obra.tmdb_id;
+        let mal_id = obra.mal_id;
+        let es_anime = obra.es_anime;
+        let cid = contenido_id;
+        let _ = crate::tmdb::fetch_and_cache_temporadas(cid, tmdb_id, mal_id, es_anime).await;
+    }
+
+    if obra.tmdb_id.is_some() {
+        let _ = crate::tmdb::fetch_and_apply_enrichment(contenido_id).await;
+    }
+
+    get_recomendacion_by_contenido_id(contenido_id)
+        .map_err(|e| format!("Error al recuperar recomendación guardada: {}", e))
+}
+
+pub fn update_contenido_enrichment(
+    contenido_id: i64,
+    director: Option<&str>,
+    creadores: Option<&str>,
+    reparto: Option<&str>,
+    total_temporadas: Option<i64>,
+    plataformas: Option<&str>,
+    providers_updated_at: Option<&str>,
+    status: Option<&str>,
+    last_air_date: Option<&str>,
+    duracion: Option<i64>,
+) -> Result<()> {
+    let conn = get_connection()?;
+    conn.execute(
+        "UPDATE contenido SET 
+            director = COALESCE(?1, director),
+            creadores = COALESCE(?2, creadores),
+            reparto = COALESCE(?3, reparto),
+            total_temporadas = COALESCE(?4, total_temporadas),
+            plataformas = COALESCE(?5, plataformas),
+            providers_updated_at = COALESCE(?6, providers_updated_at),
+            status = COALESCE(?7, status),
+            last_air_date = COALESCE(?8, last_air_date),
+            duracion = COALESCE(?9, duracion),
+            last_metadata_fetch_error = NULL
+         WHERE id = ?10",
+        params![
+            director,
+            creadores,
+            reparto,
+            total_temporadas,
+            plataformas,
+            providers_updated_at,
+            status,
+            last_air_date,
+            duracion,
+            contenido_id
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn get_contenido_enrichment_params(id: i64) -> Result<(Option<i64>, Option<i64>, String, bool)> {
+    let conn = get_connection()?;
+    conn.query_row(
+        "SELECT tmdb_id, mal_id, tipo, es_anime FROM contenido WHERE id = ?1",
+        params![id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get::<_, i64>(3)? == 1))
+    )
+}
+
 

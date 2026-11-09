@@ -4,7 +4,21 @@ import { EnProgresoView } from "./EnProgresoView";
 import { BibliotecaView } from "./BibliotecaView";
 import { HistorialView } from "./HistorialView";
 import { HoyView } from "./HoyView";
-import { Sparkles, PlayCircle, Library, Clock, Search } from "lucide-react";
+import { BuscarView } from "./BuscarView";
+import {
+  Home,
+  Calendar,
+  Bookmark,
+  BarChart2,
+  Settings,
+  Play,
+  PlayCircle,
+  Sparkles,
+  Library,
+  Clock,
+  Search,
+  Bell
+} from "lucide-react";
 import "./App.css";
 
 type Tab = "hoy" | "en_progreso" | "biblioteca" | "historial" | "buscar";
@@ -34,10 +48,6 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasErr
     return this.props.children;
   }
 }
-interface GeneroConteo {
-  nombre: string;
-  count: number;
-}
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("hoy");
@@ -47,39 +57,9 @@ function App() {
 
   const [history, setHistory] = useState<any[]>([]);
   const [forwardHistory, setForwardHistory] = useState<any[]>([]);
-  
-  const [isGenreOpen, setIsGenreOpen] = useState(false);
-  const [selectedGeneros, setSelectedGeneros] = useState<string[]>([]);
-  const [availableGenres, setAvailableGenres] = useState<GeneroConteo[]>([]);
-  const popoverRef = useRef<HTMLDivElement>(null);
 
   // Prevent double fetch in Strict Mode
   const isFetchingRef = useRef(false);
-
-  useEffect(() => {
-    invoke<GeneroConteo[]>("get_generos_disponibles_hoy")
-      .then(genres => setAvailableGenres(genres))
-      .catch(e => console.error("Error fetching available genres", e));
-  }, []);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
-        setIsGenreOpen(false);
-      }
-    };
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsGenreOpen(false);
-    };
-    if (isGenreOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('keydown', handleEscape);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleEscape);
-    };
-  }, [isGenreOpen]);
 
   useEffect(() => {
     if (toastMessage) {
@@ -94,12 +74,7 @@ function App() {
     if (retryCount === 0) setLoading(true);
     
     try {
-      let rec = await invoke("get_recommendation", { generos: selectedGeneros.length > 0 ? selectedGeneros : null });
-      
-      if (!rec && selectedGeneros.length > 0) {
-         setToastMessage("No se encontraron obras con esos géneros en el catálogo");
-      }
-      
+      let rec = await invoke("get_recommendation", { generos: null });
       setRecomendacion(rec);
     } catch (error) {
       console.error("Error loading recommendation:", error);
@@ -113,7 +88,7 @@ function App() {
     if (activeTab === "hoy" && !recomendacion && !isFetchingRef.current) {
       loadRecommendation();
     }
-  }, [activeTab, recomendacion, selectedGeneros]);
+  }, [activeTab, recomendacion]);
 
   const handleSiguiente = async (registrarEnBitacora: boolean = true) => {
     if (recomendacion?.contenido) {
@@ -162,126 +137,180 @@ function App() {
     });
   };
 
-
+  const handleReanudar = (item: any) => {
+    setLoading(false);
+    setRecomendacion({ ...item });
+    setActiveTab("hoy");
+  };
 
   return (
-    <main className="h-screen w-screen overflow-hidden bg-zinc-950 flex flex-col">
+    <main className="h-screen w-screen overflow-hidden bg-zinc-950 flex flex-col text-white font-sans select-none">
       {/* Global Toast Modal */}
       {toastMessage && (
-        <div className="fixed top-8 left-1/2 transform -translate-x-1/2 z-[100] bg-zinc-900 border border-violet-500/50 shadow-[0_0_20px_rgba(139,92,246,0.3)] rounded-full px-6 py-3 flex items-center gap-3 animate-in slide-in-from-top-4 fade-in duration-300">
-          <div className="text-2xl">🎉</div>
-          <div className="font-bold text-white text-sm">{toastMessage}</div>
+        <div className="fixed top-18 left-1/2 transform -translate-x-1/2 z-[100] bg-zinc-900/95 border border-violet-500/50 shadow-[0_0_25px_rgba(139,92,246,0.35)] rounded-full px-6 py-2.5 flex items-center gap-3 animate-in slide-in-from-top-4 fade-in duration-300 backdrop-blur-md">
+          <div className="text-xl">✨</div>
+          <div className="font-semibold text-white text-xs md:text-sm">{toastMessage}</div>
         </div>
       )}
 
-      {/* Header / Navigation */}
-      <header className="h-16 px-6 flex items-center justify-between w-full fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-neutral-950/90 via-neutral-950/50 to-transparent backdrop-blur-md">
-        <div className="w-1/3 flex justify-start">
-          <span className="text-sm font-bold tracking-wider text-white/90">QUÉVEOHOY</span>
-        </div>
-        <nav className="bg-black/50 backdrop-blur-md border border-white/10 p-1.5 rounded-full flex items-center gap-1.5 shadow-xl shadow-black/50">
-          <NavButton 
-            active={activeTab === "hoy"} 
-            onClick={() => setActiveTab("hoy")} 
-            icon={<Sparkles size={16} />} 
-            label="Hoy" 
-          />
-          <NavButton 
-            active={activeTab === "en_progreso"} 
-            onClick={() => setActiveTab("en_progreso")} 
-            icon={<PlayCircle size={16} />} 
-            label="En progreso" 
-          />
-          <NavButton 
-            active={activeTab === "biblioteca"} 
-            onClick={() => setActiveTab("biblioteca")} 
-            icon={<Library size={16} />} 
-            label="Biblioteca" 
-          />
-          <NavButton 
-            active={activeTab === "historial"} 
-            onClick={() => setActiveTab("historial")} 
-            icon={<Clock size={16} />} 
-            label="Historial" 
-          />
-          <NavButton 
-            active={activeTab === "buscar"} 
-            onClick={() => setActiveTab("buscar")} 
-            icon={<Search size={16} />} 
-            label="Buscar" 
-          />
-        </nav>
-        <div className="w-1/3 flex justify-end gap-2 items-center">
-          {activeTab === "hoy" && (
-            <div className="relative" ref={popoverRef}>
-              <button
-                onClick={() => setIsGenreOpen(!isGenreOpen)}
-                className={`text-xs border border-white/10 rounded-full px-3 py-1.5 transition-all flex items-center gap-1.5 cursor-pointer relative z-50 ${selectedGeneros.length > 0 ? 'border-purple-500/40 text-purple-200 bg-purple-500/10' : 'bg-white/5 hover:bg-white/10 text-neutral-300'}`}
-              >
-                🎭 Géneros {selectedGeneros.length > 0 ? `(${selectedGeneros.length})` : ''} ▾
-              </button>
-              
-              {isGenreOpen && (
-                <div className="absolute right-0 top-full mt-2 w-72 p-3 bg-neutral-900/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl shadow-black/80 z-50 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-150">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">Filtrar por género</span>
-                    {selectedGeneros.length > 0 && (
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); setSelectedGeneros([]); }}
-                        className="text-[10px] text-purple-400 hover:text-purple-300 cursor-pointer"
-                      >
-                        Limpiar
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto pr-1">
-                    {availableGenres.map(g => (
-                      <button
-                        key={g.nombre}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedGeneros(prev => prev.includes(g.nombre) ? prev.filter(x => x !== g.nombre) : [...prev, g.nombre]);
-                        }}
-                        className={selectedGeneros.includes(g.nombre) 
-                          ? 'text-[11px] px-2 py-1 rounded-lg bg-purple-600/30 text-purple-200 border border-purple-500/50 font-medium cursor-pointer transition-all'
-                          : 'text-[11px] px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-neutral-400 border border-white/5 cursor-pointer transition-colors'
-                        }
-                      >
-                        {g.nombre} ({g.count})
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+      {/* 1. HEADER CHROME SUPERIOR (INCLUYE LOGO EN LA ESQUINA SUPERIOR IZQUIERDA) */}
+      <header className="h-14 px-4 flex items-center justify-between w-full fixed top-0 left-0 right-0 z-40 bg-neutral-950/80 backdrop-blur-md border-b border-white/5">
+        {/* Izquierda: Logotipo y pestañas principales */}
+        <div className="flex items-center gap-8">
+          {/* Logo QuéVeoHoy en la esquina superior izquierda */}
+          <div
+            className="flex items-center gap-2.5 cursor-pointer select-none"
+            onClick={() => setActiveTab("hoy")}
+          >
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-violet-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-violet-900/50">
+              <Play size={13} fill="currentColor" className="ml-0.5" />
             </div>
-          )}
-          {activeTab === "hoy" && (
-            <button 
-              onClick={async () => {
-                if (recomendacion?.estado !== "en_progreso") return;
-                console.log("[DEBUG] Saltar en progreso ejecutado");
-                try {
-                  await invoke("omitir_todos_en_progreso");
-                  setRecomendacion(null);
-                  await loadRecommendation();
-                } catch (e) {
-                  console.error(e);
-                }
-              }}
-              disabled={loading || recomendacion?.estado !== "en_progreso"}
-              className={`px-4 py-1.5 text-xs font-medium border border-white/10 rounded-full transition-all relative z-50 ${
-                recomendacion?.estado === "en_progreso" && !loading
-                  ? "bg-white/5 hover:bg-white/10 text-neutral-300 pointer-events-auto cursor-pointer"
-                  : "bg-transparent text-neutral-500 pointer-events-none opacity-40"
+            <span className="font-bold text-white tracking-tight text-base">QuéVeoHoy</span>
+          </div>
+
+          {/* Pestañas de Navegación Horizontales */}
+          <nav className="flex items-center gap-6">
+            <button
+              onClick={() => setActiveTab("hoy")}
+              className={`flex items-center gap-1.5 text-xs md:text-sm transition-all cursor-pointer ${
+                activeTab === "hoy"
+                  ? "border-b-2 border-violet-500 pb-1 font-medium text-white shadow-[0_2px_10px_rgba(139,92,246,0.6)] -mb-[1px]"
+                  : "text-zinc-400 hover:text-zinc-200 pb-1 transition-colors -mb-[1px]"
               }`}
             >
-              Saltar en progreso
+              <Sparkles size={15} />
+              <span>Hoy</span>
             </button>
-          )}
+            <button
+              onClick={() => setActiveTab("en_progreso")}
+              className={`flex items-center gap-1.5 text-xs md:text-sm transition-all cursor-pointer ${
+                activeTab === "en_progreso"
+                  ? "border-b-2 border-violet-500 pb-1 font-medium text-white shadow-[0_2px_10px_rgba(139,92,246,0.6)] -mb-[1px]"
+                  : "text-zinc-400 hover:text-zinc-200 pb-1 transition-colors -mb-[1px]"
+              }`}
+            >
+              <PlayCircle size={15} />
+              <span>En progreso</span>
+            </button>
+            <button
+              onClick={() => setActiveTab("biblioteca")}
+              className={`flex items-center gap-1.5 text-xs md:text-sm transition-all cursor-pointer ${
+                activeTab === "biblioteca"
+                  ? "border-b-2 border-violet-500 pb-1 font-medium text-white shadow-[0_2px_10px_rgba(139,92,246,0.6)] -mb-[1px]"
+                  : "text-zinc-400 hover:text-zinc-200 pb-1 transition-colors -mb-[1px]"
+              }`}
+            >
+              <Library size={15} />
+              <span>Biblioteca</span>
+            </button>
+            <button
+              onClick={() => setActiveTab("historial")}
+              className={`flex items-center gap-1.5 text-xs md:text-sm transition-all cursor-pointer ${
+                activeTab === "historial"
+                  ? "border-b-2 border-violet-500 pb-1 font-medium text-white shadow-[0_2px_10px_rgba(139,92,246,0.6)] -mb-[1px]"
+                  : "text-zinc-400 hover:text-zinc-200 pb-1 transition-colors -mb-[1px]"
+              }`}
+            >
+              <Clock size={15} />
+              <span>Historial</span>
+            </button>
+          </nav>
+        </div>
+
+        {/* Derecha: Búsqueda, Notificaciones y Avatar (sin botones duplicados de ventana) */}
+        <div className="flex items-center gap-3">
+          {/* Botón de Búsqueda */}
+          <button
+            onClick={() => setActiveTab("buscar")}
+            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+              activeTab === "buscar"
+                ? "text-violet-400 bg-violet-600/10"
+                : "text-zinc-400 hover:text-white hover:bg-white/5"
+            }`}
+            title="Buscar"
+          >
+            <Search size={16} />
+          </button>
+
+          {/* Botón de Notificaciones */}
+          <button
+            onClick={() => setToastMessage("No hay nuevas notificaciones")}
+            className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+            title="Notificaciones"
+          >
+            <Bell size={16} />
+          </button>
+
+          {/* Avatar de Usuario */}
+          <div
+            className="w-7 h-7 rounded-full bg-gradient-to-tr from-violet-600 to-indigo-500 border border-white/20 flex items-center justify-center text-xs font-semibold text-white shadow overflow-hidden cursor-pointer ml-1"
+            title="Perfil de Usuario"
+          >
+            <span>A</span>
+          </div>
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto flex flex-col relative pt-14">
+      {/* 2. BARRA LATERAL IZQUIERDA CONTINUA (ARRANCA JUSTO DEBAJO DEL HEADER) */}
+      <aside className="w-14 bg-neutral-950/70 border-r border-white/5 flex flex-col items-center py-4 justify-between z-30 fixed left-0 top-14 bottom-0 backdrop-blur-md">
+        {/* Bloque superior de accesos */}
+        <div className="flex flex-col items-center gap-3">
+          <button
+            onClick={() => setActiveTab("hoy")}
+            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
+              activeTab === "hoy"
+                ? "bg-violet-600 text-white shadow-md shadow-violet-900/40"
+                : "text-zinc-400 hover:text-white hover:bg-white/5"
+            }`}
+            title="Inicio"
+          >
+            <Home size={17} />
+          </button>
+          <button
+            onClick={() => setToastMessage("Próximos estrenos")}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-zinc-400 hover:text-white hover:bg-white/5 transition-all cursor-pointer"
+            title="Calendario"
+          >
+            <Calendar size={17} />
+          </button>
+          <button
+            onClick={() => setActiveTab("biblioteca")}
+            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
+              activeTab === "biblioteca"
+                ? "bg-violet-600 text-white shadow-md shadow-violet-900/40"
+                : "text-zinc-400 hover:text-white hover:bg-white/5"
+            }`}
+            title="Guardados / Biblioteca"
+          >
+            <Bookmark size={17} />
+          </button>
+          <button
+            onClick={() => setActiveTab("historial")}
+            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
+              activeTab === "historial"
+                ? "bg-violet-600 text-white shadow-md shadow-violet-900/40"
+                : "text-zinc-400 hover:text-white hover:bg-white/5"
+            }`}
+            title="Historial y estadísticas"
+          >
+            <BarChart2 size={17} />
+          </button>
+        </div>
+
+        {/* Bloque inferior: Ajustes */}
+        <div className="flex flex-col items-center">
+          <button
+            onClick={() => setToastMessage("Configuración")}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-zinc-400 hover:text-white hover:bg-white/5 transition-all cursor-pointer"
+            title="Ajustes"
+          >
+            <Settings size={17} />
+          </button>
+        </div>
+      </aside>
+
+      {/* ÁREA DE CONTENIDO PRINCIPAL */}
+      <div className="flex-1 overflow-y-auto flex flex-col relative pl-14 pt-14 h-screen">
         {activeTab === "hoy" && (
           <div className="flex flex-col h-full relative w-full">
             <ErrorBoundary>
@@ -299,42 +328,20 @@ function App() {
         )}
 
         {activeTab === "en_progreso" && (
-          <EnProgresoView 
-            onReanudar={(item: any) => {
-              setRecomendacion(item);
-              setActiveTab("hoy");
-            }} 
-          />
+          <EnProgresoView onReanudar={handleReanudar} />
         )}
         {activeTab === "biblioteca" && (
-          <BibliotecaView 
-            onReanudar={(item: any) => {
-              setRecomendacion(item);
-              setActiveTab("hoy");
-            }} 
-          />
+          <BibliotecaView onReanudar={handleReanudar} />
         )}
         {activeTab === "historial" && <HistorialView />}
-        {activeTab === "buscar" && <div className="text-zinc-400 mt-10">Buscar (Próximamente)</div>}
+        {activeTab === "buscar" && (
+          <BuscarView
+            onShowToast={setToastMessage}
+            onReanudar={handleReanudar}
+          />
+        )}
       </div>
     </main>
-  );
-}
-
-function NavButton({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-2 whitespace-nowrap
-        ${active 
-          ? "bg-white/15 text-white font-medium shadow-sm rounded-full px-4 py-1.5 text-sm transition-all" 
-          : "text-neutral-400 hover:text-white rounded-full px-4 py-1.5 text-sm transition-colors"
-        }
-      `}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
   );
 }
 

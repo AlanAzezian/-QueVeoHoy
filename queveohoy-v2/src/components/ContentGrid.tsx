@@ -9,12 +9,23 @@ export interface Contenido {
   titulo: string;
   titulo_original?: string;
   poster_url: string;
+  backdrop_url?: string | null;
   sinopsis: string;
   fecha_estreno: string;
   tmdb_id?: number;
   mal_id?: number;
   creado_en?: string;
   fetch_recently_failed?: boolean;
+  generos?: string | null;
+  director?: string | null;
+  creadores?: string | null;
+  reparto?: string | null;
+  total_temporadas?: number | null;
+  plataformas?: string | null;
+  providers_updated_at?: string | null;
+  status?: string | null;
+  last_air_date?: string | null;
+  duracion?: number | null;
 }
 
 export interface ProgresoSerie {
@@ -36,9 +47,10 @@ interface ContentGridProps {
   onAction: (item: UsuarioContenido | null, action: "play" | "check" | "add" | "update_progress" | "abandon" | "bulk_abandon", data?: any) => void;
   emptyMessage: string;
   allowBulkSelection?: boolean;
+  variant?: "poster" | "landscape";
 }
 
-export function ContentGrid({ items, onAction, emptyMessage, allowBulkSelection = true }: ContentGridProps) {
+export function ContentGrid({ items, onAction, emptyMessage, allowBulkSelection = true, variant = "poster" }: ContentGridProps) {
   const [editingProgress, setEditingProgress] = useState<UsuarioContenido | null>(null);
   const [editTemporada, setEditTemporada] = useState<number>(1);
   const [editEpisodio, setEditEpisodio] = useState<number>(1);
@@ -141,15 +153,213 @@ export function ContentGrid({ items, onAction, emptyMessage, allowBulkSelection 
     );
   }
 
+  const gridClasses = variant === "landscape"
+    ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 w-full pb-20 max-w-7xl mx-auto"
+    : "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 w-full pb-20 max-w-7xl mx-auto";
+
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6 w-full pb-20 max-w-7xl mx-auto">
+    <div className={gridClasses}>
       {items.map((item) => {
         const posterUrl = item.contenido.poster_url?.startsWith("http")
           ? item.contenido.poster_url
           : (item.contenido.poster_url ? convertFileSrc(item.contenido.poster_url) : "");
 
         const isSeries = item.contenido.tipo !== "MOVIE";
-        
+
+        if (variant === "landscape") {
+          const meta = getMetadata(item.progreso?.metadata_temporadas);
+          const currentSeason = item.progreso?.temporada_actual || 1;
+          const currentEpisode = item.progreso?.episodio_actual || 1;
+          const totalEpisodes = meta && meta[currentSeason] ? meta[currentSeason] : null;
+          const progressPct = totalEpisodes
+            ? Math.min(100, Math.max(0, (currentEpisode / totalEpisodes) * 100))
+            : 0;
+          const year = item.contenido.fecha_estreno ? item.contenido.fecha_estreno.substring(0, 4) : "";
+          const tipoLabel = item.contenido.tipo === "MOVIE"
+            ? "Película"
+            : (item.contenido.es_anime ? "Anime" : "Serie");
+
+          return (
+            <div
+              key={item.contenido.id}
+              onClick={() => onAction(item, "play")}
+              className="aspect-[16/9] w-full min-h-[170px] max-h-[220px] rounded-2xl overflow-hidden relative border border-white/10 bg-neutral-900/70 backdrop-blur-md hover:border-purple-500/40 transition-all duration-300 shadow-lg shadow-black/40 flex p-3 gap-3.5 items-center group cursor-pointer"
+            >
+              {/* Capa ambiental de fondo integrada */}
+              <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
+                {posterUrl && (
+                  <img
+                    src={posterUrl}
+                    alt=""
+                    aria-hidden="true"
+                    className="w-full h-full object-cover blur-2xl opacity-25 scale-125"
+                  />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/80 to-neutral-950/60" />
+              </div>
+
+              {/* Checkbox de selección múltiple en esquina superior derecha */}
+              {allowBulkSelection && (
+                <div
+                  className="absolute top-3 right-3 z-20 cursor-pointer"
+                  onClick={(e) => toggleSelection(e, item.contenido.id)}
+                  title="Seleccionar"
+                >
+                  <div
+                    className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${
+                      selectedIds.has(item.contenido.id)
+                        ? "bg-violet-600 border-violet-500"
+                        : "bg-black/50 border-white/30 hover:border-white/70"
+                    }`}
+                  >
+                    {selectedIds.has(item.contenido.id) && <Check size={13} className="text-white" />}
+                  </div>
+                </div>
+              )}
+
+              {/* Miniatura izquierda (Póster vertical 2:3) */}
+              {posterUrl ? (
+                <img
+                  src={posterUrl}
+                  alt={item.contenido.titulo}
+                  className="h-full aspect-[2/3] rounded-xl object-cover shrink-0 border border-white/10 shadow-md transition-transform duration-300 group-hover:scale-102"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    if (!target.src.includes("via.placeholder.com")) {
+                      target.src = `https://via.placeholder.com/350x525/27272a/71717a?text=Sin+Poster`;
+                    }
+                  }}
+                />
+              ) : (
+                <div className="h-full aspect-[2/3] rounded-xl shrink-0 border border-white/10 shadow-md flex items-center justify-center text-xs text-zinc-500 bg-zinc-800/80 font-medium text-center px-2">
+                  Sin póster
+                </div>
+              )}
+
+              {/* Bloque de información derecho */}
+              <div className="flex flex-col flex-1 min-w-0 h-full justify-between py-0.5">
+                <div className="flex flex-col">
+                  <h3
+                    className="font-semibold text-white text-base md:text-lg line-clamp-1 tracking-tight pr-7"
+                    title={item.contenido.titulo}
+                  >
+                    {item.contenido.titulo}
+                  </h3>
+
+                  <div className="flex items-center gap-1.5 text-neutral-400 text-xs mt-0.5">
+                    <span>{tipoLabel}</span>
+                    {year && (
+                      <>
+                        <span className="text-neutral-600">•</span>
+                        <span>{year}</span>
+                      </>
+                    )}
+                  </div>
+
+                  {isSeries && item.progreso ? (
+                    <div className="text-purple-300 bg-purple-500/15 border border-purple-500/30 px-2.5 py-0.5 rounded-full text-xs font-medium w-fit my-1.5 shadow-sm shadow-purple-950/30">
+                      T{currentSeason} · Cap. {currentEpisode}
+                      {totalEpisodes ? ` / ${totalEpisodes}` : ""}
+                    </div>
+                  ) : (
+                    <div className="text-purple-300 bg-purple-500/15 border border-purple-500/30 px-2.5 py-0.5 rounded-full text-xs font-medium w-fit my-1.5 shadow-sm shadow-purple-950/30">
+                      {item.contenido.tipo === "MOVIE" ? "Película en curso" : "En progreso"}
+                    </div>
+                  )}
+                </div>
+
+                {/* Barra de progreso exterior en el flujo de texto */}
+                <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden my-2">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-all duration-500"
+                    style={{ width: `${isSeries ? progressPct : 50}%` }}
+                  />
+                </div>
+
+                {/* Botonera de acciones rápidas integrada */}
+                {item.estado !== "terminada" && (
+                  <div className="flex items-center justify-between gap-2 pt-0.5">
+                    <div className="flex items-center gap-1.5">
+                      {isSeries ? (
+                        <>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAction(item, "play");
+                            }}
+                            className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 active:scale-95 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-md shadow-violet-950/50 cursor-pointer"
+                            title="Reanudar en Hoy"
+                          >
+                            <Play size={13} className="fill-current" />
+                            <span>Reanudar</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAction(item, "add");
+                            }}
+                            className="flex items-center gap-1 bg-white/10 hover:bg-white/20 active:scale-95 text-zinc-100 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all border border-white/10 cursor-pointer"
+                            title="+1 Episodio"
+                          >
+                            <Plus size={14} />
+                            <span>+1 Ep</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleEditClick(e, item);
+                            }}
+                            className="p-1.5 bg-white/5 hover:bg-white/15 active:scale-95 text-purple-300 hover:text-purple-200 rounded-lg transition-all border border-white/10 cursor-pointer"
+                            title="Editar progreso"
+                          >
+                            <Edit3 size={14} />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAction(item, "play");
+                            }}
+                            className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 active:scale-95 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-md shadow-violet-950/50 cursor-pointer"
+                            title="Reanudar en Hoy"
+                          >
+                            <Play size={13} className="fill-current" />
+                            <span>Reanudar</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAction(item, "check");
+                            }}
+                            className="flex items-center gap-1 bg-emerald-600/80 hover:bg-emerald-500 active:scale-95 text-white px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer"
+                            title="Marcar como vista"
+                          >
+                            <Check size={14} />
+                            <span>Vista</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAction(item, "abandon");
+                      }}
+                      className="p-1.5 text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 active:scale-95 rounded-lg transition-all cursor-pointer ml-auto"
+                      title="Abandonar"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div key={item.contenido.id} className="relative group flex flex-col gap-2">
             <div className="relative w-full aspect-[2/3] rounded-xl overflow-hidden bg-zinc-800 shadow-lg cursor-pointer">

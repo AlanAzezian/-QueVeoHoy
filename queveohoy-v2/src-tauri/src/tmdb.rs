@@ -1,6 +1,8 @@
 use rusqlite::params;
 use serde_json::Value;
 use crate::db::get_connection;
+use crate::models::ResultadoBusqueda;
+use crate::discovery::TMDB_GENRE_MAP;
 use std::time::Duration;
 use tokio::time::sleep;
 use std::sync::{OnceLock, Mutex};
@@ -152,6 +154,14 @@ async fn fetch_tmdb_series(contenido_id: i64, tmdb_id: i64) -> Result<String, St
     }
     
     let json: Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    // Actualizar total_temporadas si está disponible
+    if let Some(total_seasons) = json["number_of_seasons"].as_i64() {
+        if let Ok(conn) = get_connection() {
+            let _ = conn.execute("UPDATE contenido SET total_temporadas = ?1 WHERE id = ?2 AND total_temporadas IS NULL", params![total_seasons, contenido_id]);
+        }
+    }
+
     let seasons = json["seasons"].as_array().ok_or_else(|| "No seasons array found".to_string())?;
     
     let mut seasons_map = serde_json::Map::new();
@@ -261,3 +271,458 @@ pub async fn backfill_metadata_cache() -> Result<BackfillReport, String> {
 }
 
 
+
+pub async fn buscar_online(query: String, tipo_filtro: Option<String>) -> Result<Vec<ResultadoBusqueda>, String> {
+    let query_clean = query.trim().to_string();
+    if query_clean.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let filtro = tipo_filtro.as_deref().unwrap_or("todos").to_lowercase();
+    dotenvy::dotenv().ok();
+    let api_key = std::env::var("TMDB_API_KEY").unwrap_or_else(|_| "239957e2e77a70d1dd415586f3f551b0".to_string());
+
+    let client = reqwest::Client::builder()
+        .user_agent("QueVeoHoy/2.0 (https://github.com/alan/queveohoy)")
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let tmdb_task = {
+        let client = client.clone();
+        let api_key = api_key.clone();
+        let query_str = query_clean.clone();
+        async move {
+            let url = "https://api.themoviedb.org/3/search/multi";
+            let resp = client.get(url)
+                .query(&[
+                    ("api_key", api_key.as_str()),
+                    ("query", query_str.as_str()),
+                    ("language", "es-ES"),
+                    ("include_adult", "false"),
+                ])
+                .send()
+                .await;
+            match resp {
+                Ok(r) if r.status().is_success() => r.json::<Value>().await.ok(),
+                _ => None,
+            }
+        }
+    };
+
+    let should_query_jikan = filtro == "todos" || filtro == "anime" || filtro == "all";
+    let jikan_task = {
+        let client = client.clone();
+        let query_str = query_clean.clone();
+        async move {
+            if !should_query_jikan {
+                return None;
+            }
+            let url = "https://api.jikan.moe/v4/anime";
+            let resp = client.get(url)
+                .query(&[
+                    ("q", query_str.as_str()),
+                    ("sfw", "true"),
+                    ("limit", "15"),
+                ])
+                .timeout(Duration::from_secs(6))
+                .send()
+                .await;
+            match resp {
+                Ok(r) if r.status().is_success() => r.json::<Value>().await.ok(),
+                _ => None,
+            }
+        }
+    };
+
+    let tmdb_handle = tauri::async_runtime::spawn(tmdb_task);
+    let jikan_handle = tauri::async_runtime::spawn(jikan_task);
+    let tmdb_json = tmdb_handle.await.ok().flatten();
+    let jikan_json = jikan_handle.await.ok().flatten();
+
+    let mut resultados: Vec<ResultadoBusqueda> = Vec::new();
+    let mut seen_titles: HashSet<String> = HashSet::new();
+
+    if let Some(json) = tmdb_json {
+        if let Some(results) = json["results"].as_array() {
+            for item in results {
+                let media_type = item["media_type"].as_str().unwrap_or("");
+                if media_type != "movie" && media_type != "tv" {
+                    continue;
+                }
+
+                let tmdb_id = item["id"].as_i64().unwrap_or(0);
+                if tmdb_id == 0 {
+                    continue;
+                }
+
+                let tipo = if media_type == "tv" { "TV" } else { "MOVIE" };
+
+                let mut es_anime = false;
+                if let Some(genres) = item["genre_ids"].as_array() {
+                    if genres.iter().any(|g| g.as_i64() == Some(16)) {
+                        if let Some(origin) = item["origin_country"].as_array() {
+                            if origin.iter().any(|c| c.as_str() == Some("JP")) {
+                                es_anime = true;
+                            }
+                        } else if item["original_language"].as_str() == Some("ja") {
+                            es_anime = true;
+                        }
+                    }
+                }
+
+                if (filtro == "peliculas" || filtro == "movie") && tipo != "MOVIE" {
+                    continue;
+                }
+                if (filtro == "series" || filtro == "tv") && (tipo != "TV" || es_anime) {
+                    continue;
+                }
+                if filtro == "anime" && !es_anime {
+                    continue;
+                }
+
+                let titulo = item["title"].as_str().or(item["name"].as_str()).unwrap_or("").trim().to_string();
+                if titulo.is_empty() {
+                    continue;
+                }
+
+                let poster_path = item["poster_path"].as_str().unwrap_or("").trim();
+                if poster_path.is_empty() {
+                    continue;
+                }
+                let poster_url = Some(format!("https://image.tmdb.org/t/p/w500{}", poster_path));
+
+                let backdrop_path = item["backdrop_path"].as_str().map(|s| s.trim()).filter(|s| !s.is_empty());
+                let backdrop_url = backdrop_path.map(|bp| {
+                    if bp.starts_with("http://") || bp.starts_with("https://") {
+                        bp.to_string()
+                    } else if bp.starts_with('/') {
+                        format!("https://image.tmdb.org/t/p/w1280{}", bp)
+                    } else {
+                        format!("https://image.tmdb.org/t/p/w1280/{}", bp)
+                    }
+                });
+
+                let sinopsis = item["overview"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                let titulo_original = item["original_title"].as_str().or(item["original_name"].as_str()).map(|s| s.trim().to_string());
+                let fecha_estreno = item["release_date"].as_str().or(item["first_air_date"].as_str()).map(|s| s.trim().to_string());
+
+                let generos: Option<String> = if let Some(gids) = item["genre_ids"].as_array() {
+                    let nombres: Vec<&str> = gids.iter()
+                        .filter_map(|g| g.as_i64())
+                        .filter_map(|id| TMDB_GENRE_MAP.iter().find(|(gid, _)| *gid == id).map(|(_, name)| *name))
+                        .take(4)
+                        .collect();
+                    if nombres.is_empty() { None } else { Some(format!("[{}]", nombres.iter().map(|n| format!("\"{}\"", n)).collect::<Vec<_>>().join(","))) }
+                } else { None };
+
+                seen_titles.insert(titulo.to_lowercase());
+
+                resultados.push(ResultadoBusqueda {
+                    tmdb_id: Some(tmdb_id),
+                    mal_id: None,
+                    tipo: tipo.to_string(),
+                    es_anime,
+                    titulo,
+                    titulo_original,
+                    poster_url,
+                    backdrop_url,
+                    sinopsis,
+                    fecha_estreno,
+                    generos,
+                    ya_en_biblioteca: false,
+                    estado_actual: None,
+                });
+            }
+        }
+    }
+
+    if let Some(json) = jikan_json {
+        if let Some(data) = json["data"].as_array() {
+            for item in data {
+                let mal_id = item["mal_id"].as_i64().unwrap_or(0);
+                if mal_id == 0 {
+                    continue;
+                }
+
+                let raw_type = item["type"].as_str().unwrap_or("TV");
+                let tipo = if raw_type == "Movie" { "MOVIE" } else { "TV" };
+
+                if (filtro == "peliculas" || filtro == "movie") && tipo != "MOVIE" {
+                    continue;
+                }
+                if (filtro == "series" || filtro == "tv") && tipo != "TV" {
+                    continue;
+                }
+
+                let titulo = item["title"].as_str().unwrap_or("").trim().to_string();
+                if titulo.is_empty() {
+                    continue;
+                }
+
+                let title_lower = titulo.to_lowercase();
+                if seen_titles.contains(&title_lower) {
+                    continue;
+                }
+                seen_titles.insert(title_lower);
+
+                let poster_url = item["images"]["jpg"]["large_image_url"]
+                    .as_str()
+                    .or(item["images"]["jpg"]["image_url"].as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+
+                if poster_url.is_none() {
+                    continue;
+                }
+
+                let sinopsis = item["synopsis"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                let titulo_original = item["title_japanese"].as_str().map(|s| s.trim().to_string());
+                let fecha_estreno = item["aired"]["from"].as_str().map(|s| s.split('T').next().unwrap_or("").to_string());
+
+                let generos: Option<String> = if let Some(gens) = item["genres"].as_array() {
+                    let nombres: Vec<String> = gens.iter()
+                        .filter_map(|g| g["name"].as_str())
+                        .take(4)
+                        .map(|n| format!("\"{}\"", n))
+                        .collect();
+                    if nombres.is_empty() { None } else { Some(format!("[{}]", nombres.join(","))) }
+                } else { None };
+
+                resultados.push(ResultadoBusqueda {
+                    tmdb_id: None,
+                    mal_id: Some(mal_id),
+                    tipo: tipo.to_string(),
+                    es_anime: true,
+                    titulo,
+                    titulo_original,
+                    poster_url,
+                    backdrop_url: None,
+                    sinopsis,
+                    fecha_estreno,
+                    generos,
+                    ya_en_biblioteca: false,
+                    estado_actual: None,
+                });
+            }
+        }
+    }
+
+    if let Ok(conn) = get_connection() {
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT uc.estado
+             FROM contenido c
+             JOIN usuario_contenido uc ON c.id = uc.contenido_id
+             WHERE (?1 IS NOT NULL AND c.tmdb_id = ?1) OR (?2 IS NOT NULL AND c.mal_id = ?2)
+             LIMIT 1"
+        ) {
+            for res in &mut resultados {
+                let estado: Option<String> = stmt.query_row(
+                    params![res.tmdb_id, res.mal_id],
+                    |row| row.get(0)
+                ).ok();
+
+                if let Some(est) = estado {
+                    res.ya_en_biblioteca = true;
+                    res.estado_actual = Some(est);
+                } else {
+                    res.ya_en_biblioteca = false;
+                    res.estado_actual = None;
+                }
+            }
+        }
+    }
+
+    Ok(resultados)
+}
+
+pub async fn fetch_and_apply_enrichment(contenido_id: i64) -> Result<crate::models::Contenido, String> {
+    let (tmdb_id_opt, _mal_id, tipo, _es_anime) = crate::db::get_contenido_enrichment_params(contenido_id)
+        .map_err(|e| format!("Error leyendo parámetros de enriquecimiento para {}: {}", contenido_id, e))?;
+
+    let tmdb_id = match tmdb_id_opt {
+        Some(id) => id,
+        None => {
+            // Contenido sin tmdb_id (ej: anime de Jikan sin TMDB)
+            return crate::db::get_recomendacion_by_contenido_id(contenido_id)
+                .map(|r| r.contenido)
+                .map_err(|e| e.to_string());
+        }
+    };
+
+    dotenvy::dotenv().ok();
+    let api_key = std::env::var("TMDB_API_KEY").unwrap_or_else(|_| "239957e2e77a70d1dd415586f3f551b0".to_string());
+    let client = reqwest::Client::builder()
+        .user_agent("QueVeoHoy/2.0 (https://github.com/alan/queveohoy)")
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let is_tv = tipo == "TV";
+    let endpoint = if is_tv { "tv" } else { "movie" };
+    let url = format!(
+        "https://api.themoviedb.org/3/{}/{}?api_key={}&language=es-ES&append_to_response=credits,watch/providers",
+        endpoint, tmdb_id, api_key
+    );
+
+    let record_error = |cid: i64, msg: &str| {
+        eprintln!("[TMDB Enrichment] {}", msg);
+        if let Ok(conn) = crate::db::get_connection() {
+            if let Err(err) = conn.execute(
+                "UPDATE contenido SET last_metadata_fetch_error = datetime('now', 'localtime') WHERE id = ?1",
+                rusqlite::params![cid],
+            ) {
+                eprintln!("[TMDB Enrichment] Error marcando last_metadata_fetch_error para contenido {}: {}", cid, err);
+            }
+        }
+    };
+
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            record_error(contenido_id, &format!("Error de red consultando TMDB {} ({}): {}", tmdb_id, tipo, e));
+            return crate::db::get_recomendacion_by_contenido_id(contenido_id)
+                .map(|r| r.contenido)
+                .map_err(|err| err.to_string());
+        }
+    };
+
+    if !resp.status().is_success() {
+        record_error(contenido_id, &format!("TMDB devolvió status {} para {} (ID {})", resp.status(), tmdb_id, contenido_id));
+        return crate::db::get_recomendacion_by_contenido_id(contenido_id)
+            .map(|r| r.contenido)
+            .map_err(|err| err.to_string());
+    }
+
+    let json: Value = match resp.json().await {
+        Ok(j) => j,
+        Err(e) => {
+            record_error(contenido_id, &format!("Error parseando JSON para TMDB {}: {}", tmdb_id, e));
+            return crate::db::get_recomendacion_by_contenido_id(contenido_id)
+                .map(|r| r.contenido)
+                .map_err(|err| err.to_string());
+        }
+    };
+
+    let mut director: Option<String> = None;
+    let mut creadores: Option<String> = None;
+    let mut total_temporadas: Option<i64> = None;
+    let status: Option<String> = json["status"].as_str().map(|s| s.trim().to_string());
+    let mut last_air_date: Option<String> = None;
+    let mut duracion: Option<i64> = None;
+
+    if is_tv {
+        // Creadores de serie (array de strings)
+        if let Some(created_by) = json["created_by"].as_array() {
+            let names: Vec<String> = created_by
+                .iter()
+                .filter_map(|c| c["name"].as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !names.is_empty() {
+                creadores = serde_json::to_string(&names).ok();
+            }
+        }
+        total_temporadas = json["number_of_seasons"].as_i64();
+        last_air_date = json["last_air_date"].as_str().map(|s| s.trim().to_string());
+    } else {
+        // Director de película (búsqueda en credits.crew job == 'Director')
+        if let Some(crew) = json["credits"]["crew"].as_array() {
+            let directores: Vec<String> = crew
+                .iter()
+                .filter(|m| m["job"].as_str() == Some("Director"))
+                .filter_map(|m| m["name"].as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !directores.is_empty() {
+                director = Some(directores.join(", "));
+            }
+        }
+        duracion = json["runtime"].as_i64().filter(|&r| r > 0);
+    }
+
+    // Reparto principal (hasta 10 integrantes)
+    let mut cast_items = Vec::new();
+    if let Some(cast) = json["credits"]["cast"].as_array() {
+        for (i, actor) in cast.iter().take(10).enumerate() {
+            let nombre = actor["name"].as_str().unwrap_or("").trim().to_string();
+            let personaje = actor["character"].as_str().unwrap_or("").trim().to_string();
+            let orden = actor["order"].as_i64().unwrap_or(i as i64);
+            if !nombre.is_empty() {
+                cast_items.push(crate::models::MiembroReparto {
+                    nombre,
+                    personaje,
+                    orden,
+                });
+            }
+        }
+    }
+    let reparto = if !cast_items.is_empty() {
+        serde_json::to_string(&cast_items).ok()
+    } else {
+        None
+    };
+
+    // Plataformas de streaming para Argentina (AR)
+    let parse_providers = |list_opt: Option<&Value>, tipo_cat: &str| -> Vec<crate::models::ProveedorStreaming> {
+        let mut list = Vec::new();
+        if let Some(items) = list_opt.and_then(|v| v.as_array()) {
+            for it in items {
+                let id = it["provider_id"].as_i64().unwrap_or(0);
+                let nombre = it["provider_name"].as_str().unwrap_or("").trim().to_string();
+                let logo_path = it["logo_path"].as_str().map(|s| s.trim().to_string());
+                if !nombre.is_empty() {
+                    list.push(crate::models::ProveedorStreaming {
+                        id,
+                        nombre,
+                        logo_path,
+                        tipo: tipo_cat.to_string(),
+                    });
+                }
+            }
+        }
+        list
+    };
+
+    let (flatrate, rent, buy) = if let Some(ar_node) = json["watch/providers"]["results"]["AR"].as_object() {
+        (
+            parse_providers(ar_node.get("flatrate"), "flatrate"),
+            parse_providers(ar_node.get("rent"), "rent"),
+            parse_providers(ar_node.get("buy"), "buy"),
+        )
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
+
+    // Respuesta exitosa: siempre persistimos explícitamente el objeto de plataformas (incluso si está vacío)
+    let plat_struct = crate::models::PlataformasStreaming { flatrate, rent, buy };
+    let plataformas_str = serde_json::to_string(&plat_struct)
+        .unwrap_or_else(|_| r#"{"flatrate":[],"rent":[],"buy":[]}"#.to_string());
+    let plataformas = Some(plataformas_str);
+
+    let providers_updated_at: Option<String> = if let Ok(conn) = crate::db::get_connection() {
+        conn.query_row("SELECT datetime('now', 'localtime')", [], |row| row.get(0)).ok()
+    } else {
+        None
+    };
+
+    // Persistir en SQLite
+    if let Err(e) = crate::db::update_contenido_enrichment(
+        contenido_id,
+        director.as_deref(),
+        creadores.as_deref(),
+        reparto.as_deref(),
+        total_temporadas,
+        plataformas.as_deref(),
+        providers_updated_at.as_deref(),
+        status.as_deref(),
+        last_air_date.as_deref(),
+        duracion,
+    ) {
+        eprintln!("[TMDB Enrichment] Error actualizando BD para {}: {}", contenido_id, e);
+    }
+
+    crate::db::get_recomendacion_by_contenido_id(contenido_id)
+        .map(|r| r.contenido)
+        .map_err(|e| format!("Error recuperando contenido enriquecido: {}", e))
+}

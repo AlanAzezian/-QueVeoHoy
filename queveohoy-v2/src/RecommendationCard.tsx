@@ -1,21 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { Plus, Edit3, X, Check } from "lucide-react";
-
-interface Contenido {
-  id: number;
-  tipo: string;
-  es_anime: boolean;
-  titulo: string;
-  titulo_original?: string;
-  poster_url: string;
-  sinopsis: string;
-  fecha_estreno: string;
-  tmdb_id?: number;
-  mal_id?: number;
-  creado_en?: string;
-  fetch_recently_failed?: boolean;
-}
+import { Contenido } from "./components/ContentGrid";
 
 interface RecomendacionHoy {
   contenido: Contenido;

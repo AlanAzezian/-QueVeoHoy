@@ -124,6 +124,7 @@ export function EnProgresoView({ onReanudar }: EnProgresoViewProps) {
         items={sortedItems} 
         onAction={handleAction} 
         emptyMessage="No tienes series o películas en progreso." 
+        variant="landscape"
       />
     </div>
   );

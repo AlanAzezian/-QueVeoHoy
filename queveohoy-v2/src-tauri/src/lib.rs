@@ -4,7 +4,7 @@ mod tmdb;
 mod discovery;
 
 use std::sync::Mutex;
-use std::collections::HashSet;
+
 use tauri::State;
 use db::DbState;
 use models::RecomendacionHoy;
@@ -132,6 +132,23 @@ fn abandonar_multiples(ids: Vec<i64>) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn buscar_online(query: String, tipo_filtro: Option<String>) -> Result<Vec<models::ResultadoBusqueda>, String> {
+    tmdb::buscar_online(query, tipo_filtro).await
+}
+
+#[tauri::command]
+async fn guardar_obra_busqueda(obra: models::ObraBusquedaPayload, estado: String) -> Result<models::RecomendacionHoy, String> {
+    db::guardar_obra_busqueda(obra, estado).await
+}
+
+#[tauri::command]
+async fn enriquecer_contenido(id: i64) -> Result<models::Contenido, String> {
+    tmdb::fetch_and_apply_enrichment(id).await
+}
+
+
+
+#[tauri::command]
 fn get_generos_disponibles_hoy() -> Result<Vec<models::GeneroConteo>, String> {
     db::get_generos_disponibles_hoy().map_err(|e| {
         eprintln!("DB ERROR (get_generos_disponibles_hoy): {:?}", e);
@@ -172,7 +189,10 @@ pub fn run() {
             backfill_metadata_cache,
             omitir_todos_en_progreso,
             abandonar_multiples,
-            get_generos_disponibles_hoy
+            get_generos_disponibles_hoy,
+            buscar_online,
+            guardar_obra_busqueda,
+            enriquecer_contenido
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

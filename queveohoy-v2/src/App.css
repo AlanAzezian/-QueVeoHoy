@@ -1,1 +1,119 @@
 @import "tailwindcss";
+
+/* ==========================================================================
+   Cinema Carousel 3D Animation Keyframes & Classes
+   Curva cinematográfica: cubic-bezier(0.22, 1, 0.36, 1) | Duración: 400ms
+   ========================================================================== */
+
+@keyframes carouselSlideNextCenter {
+  0% {
+    transform: translateX(337px) rotateY(-32deg) translateZ(-65px) scale(0.78);
+    opacity: 0.65;
+  }
+  38% {
+    transform: translateX(145px) rotateY(-18deg) translateZ(-15px) scale(0.91);
+    opacity: 0.88;
+  }
+  72% {
+    transform: translateX(35px) rotateY(-5deg) translateZ(12px) scale(0.98);
+    opacity: 0.98;
+  }
+  100% {
+    transform: translateX(0) rotateY(0deg) translateZ(20px) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes carouselSlideNextLeft {
+  0% {
+    transform: translateX(337px) rotateY(0deg) translateZ(20px) scale(1);
+    opacity: 1;
+  }
+  35% {
+    transform: translateX(190px) rotateY(28deg) translateZ(-45px) scale(0.92);
+    opacity: 0.88;
+  }
+  70% {
+    transform: translateX(65px) rotateY(18deg) translateZ(-25px) scale(0.88);
+    opacity: 0.85;
+  }
+  100% {
+    transform: translateX(0) rotateY(14deg) translateZ(-20px) scale(0.88);
+    opacity: 1;
+  }
+}
+
+@keyframes carouselSlidePrevCenter {
+  from {
+    transform: translateX(-305px) rotateY(14deg) translateZ(-20px) scale(0.88);
+    opacity: 0.85;
+  }
+  to {
+    transform: translateX(0) rotateY(0deg) translateZ(20px) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes carouselSlidePrevRight {
+  from {
+    transform: translateX(-305px) rotateY(0deg) translateZ(20px) scale(1);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(0) rotateY(-14deg) translateZ(-20px) scale(0.88);
+    opacity: 1;
+  }
+}
+
+.animate-carousel-next-center {
+  animation: carouselSlideNextCenter 480ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-carousel-next-left {
+  animation: carouselSlideNextLeft 480ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-carousel-prev-center {
+  animation: carouselSlidePrevCenter 400ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-carousel-prev-right {
+  animation: carouselSlidePrevRight 400ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* ==========================================================================
+   Perspectiva 3D Real para Tarjetas Laterales del Cinema Carousel
+   Estado permanente idéntico a la presentación destacada (sin deformación en hover)
+   ========================================================================== */
+
+.carousel-card-left {
+  transform: rotateY(14deg) translateZ(-20px) scale(0.88);
+  transform-style: preserve-3d;
+  box-shadow: -18px 24px 45px rgba(0, 0, 0, 0.9), 0 0 25px rgba(139, 92, 246, 0.25);
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.carousel-card-right {
+  transform: rotateY(-14deg) translateZ(-20px) scale(0.88);
+  transform-style: preserve-3d;
+  box-shadow: 18px 24px 45px rgba(0, 0, 0, 0.9), 0 0 25px rgba(139, 92, 246, 0.25);
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.carousel-card-center {
+  transform: rotateY(0deg) translateZ(20px) scale(1);
+  transform-style: preserve-3d;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.95), 0 0 40px rgba(139, 92, 246, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-carousel-next-center,
+  .animate-carousel-next-left,
+  .animate-carousel-prev-center,
+  .animate-carousel-prev-right {
+    animation: none !important;
+  }
+}
+
