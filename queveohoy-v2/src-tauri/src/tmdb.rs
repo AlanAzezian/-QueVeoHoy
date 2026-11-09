@@ -611,6 +611,17 @@ pub async fn fetch_and_apply_enrichment(contenido_id: i64) -> Result<crate::mode
     let mut last_air_date: Option<String> = None;
     let mut duracion: Option<i64> = None;
 
+    let backdrop_path = json["backdrop_path"].as_str().map(|s| s.trim()).filter(|s| !s.is_empty());
+    let backdrop_url = backdrop_path.map(|bp| {
+        if bp.starts_with("http://") || bp.starts_with("https://") {
+            bp.to_string()
+        } else if bp.starts_with('/') {
+            format!("https://image.tmdb.org/t/p/w1280{}", bp)
+        } else {
+            format!("https://image.tmdb.org/t/p/w1280/{}", bp)
+        }
+    });
+
     if is_tv {
         // Creadores de serie (array de strings)
         if let Some(created_by) = json["created_by"].as_array() {
@@ -718,6 +729,7 @@ pub async fn fetch_and_apply_enrichment(contenido_id: i64) -> Result<crate::mode
         status.as_deref(),
         last_air_date.as_deref(),
         duracion,
+        backdrop_url.as_deref(),
     ) {
         eprintln!("[TMDB Enrichment] Error actualizando BD para {}: {}", contenido_id, e);
     }

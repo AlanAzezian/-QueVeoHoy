@@ -259,22 +259,6 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
     if !in_progress_contents.is_empty() {
         let mut rng = rand::thread_rng();
         let selected = in_progress_contents.choose(&mut rng).cloned();
-        if let Some(ref sel) = selected {
-            if let Some(cid) = sel.contenido.id {
-                let should_enrich = sel.contenido.tmdb_id.is_some()
-                    && sel.contenido.fetch_recently_failed != Some(true)
-                    && (
-                        sel.contenido.providers_updated_at.is_none()
-                        || (sel.contenido.tipo == "MOVIE" && sel.contenido.duracion.is_none())
-                        || (sel.contenido.tipo != "MOVIE" && sel.contenido.status.is_none())
-                    );
-                if should_enrich {
-                    tauri::async_runtime::spawn(async move {
-                        let _ = crate::tmdb::fetch_and_apply_enrichment(cid).await;
-                    });
-                }
-            }
-        }
         println!("[DEBUG Hoy] Recomendación encontrada en_progreso: {:?}", selected);
         return Ok(selected);
     }
@@ -309,7 +293,16 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
         while let Some(row) = rows.next()? {
             let id: i64 = row.get(0)?;
             let generos_str: Option<String> = row.get(12).ok().flatten();
-            let backdrop_url: Option<String> = row.get::<_, Option<String>>(13).ok().flatten();
+            let raw_backdrop: Option<String> = row.get::<_, Option<String>>(13).ok().flatten();
+            let backdrop_url = raw_backdrop.map(|bp| {
+                if bp.starts_with("http://") || bp.starts_with("https://") {
+                    bp
+                } else if bp.starts_with('/') {
+                    format!("https://image.tmdb.org/t/p/w1280{}", bp)
+                } else {
+                    format!("https://image.tmdb.org/t/p/w1280/{}", bp)
+                }
+            });
             let director: Option<String> = row.get::<_, Option<String>>(14).ok().flatten();
             let creadores: Option<String> = row.get::<_, Option<String>>(15).ok().flatten();
             let reparto: Option<String> = row.get::<_, Option<String>>(16).ok().flatten();
@@ -413,20 +406,6 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
     let selected = available_contents.choose(&mut rng).cloned();
     
     let res = selected.map(|c| {
-        if let Some(cid) = c.id {
-            let should_enrich = c.tmdb_id.is_some()
-                && c.fetch_recently_failed != Some(true)
-                && (
-                    c.providers_updated_at.is_none()
-                    || (c.tipo == "MOVIE" && c.duracion.is_none())
-                    || (c.tipo != "MOVIE" && c.status.is_none())
-                );
-            if should_enrich {
-                tauri::async_runtime::spawn(async move {
-                    let _ = crate::tmdb::fetch_and_apply_enrichment(cid).await;
-                });
-            }
-        }
         RecomendacionHoy {
             contenido: c,
             estado: None,
@@ -441,14 +420,30 @@ fn map_recomendacion(row: &rusqlite::Row) -> rusqlite::Result<RecomendacionHoy> 
     let id: i64 = row.get(0)?;
     let raw_poster: Option<String> = row.get(7)?;
     let poster_url = raw_poster.map(|path| {
+        if path.starts_with("http://") || path.starts_with("https://") {
+            return path;
+        }
         let home_dir = dirs::home_dir()
             .or_else(|| std::env::var("USERPROFILE").map(PathBuf::from).ok())
             .unwrap_or_else(|| PathBuf::from(""));
         let full_path = home_dir.join(".queveohoy").join("cache_posters").join(format!("{}.jpg", id));
         if full_path.exists() {
             full_path.to_string_lossy().to_string()
-        } else {
+        } else if path.starts_with('/') {
             format!("https://image.tmdb.org/t/p/w500{}", path)
+        } else {
+            format!("https://image.tmdb.org/t/p/w500/{}", path)
+        }
+    });
+
+    let raw_backdrop: Option<String> = row.get::<usize, Option<String>>(20).ok().flatten();
+    let backdrop_url = raw_backdrop.map(|bp| {
+        if bp.starts_with("http://") || bp.starts_with("https://") {
+            bp
+        } else if bp.starts_with('/') {
+            format!("https://image.tmdb.org/t/p/w1280{}", bp)
+        } else {
+            format!("https://image.tmdb.org/t/p/w1280/{}", bp)
         }
     });
 
@@ -461,7 +456,7 @@ fn map_recomendacion(row: &rusqlite::Row) -> rusqlite::Result<RecomendacionHoy> 
         titulo: row.get(5)?,
         titulo_original: row.get(6)?,
         poster_url,
-        backdrop_url: row.get::<usize, Option<String>>(20).ok().flatten(),
+        backdrop_url,
         sinopsis: row.get(8)?,
         fecha_estreno: row.get(9)?,
         creado_en: row.get(10)?,
@@ -478,26 +473,30 @@ fn map_recomendacion(row: &rusqlite::Row) -> rusqlite::Result<RecomendacionHoy> 
         duracion: row.get::<usize, Option<i64>>(29).ok().flatten(),
     };
     
-    let uc_id: i64 = row.get(11)?;
-    let estado: String = row.get(12)?;
+    let uc_id: Option<i64> = row.get::<_, Option<i64>>(11).ok().flatten();
+    let estado: Option<String> = row.get::<_, Option<String>>(12).ok().flatten();
     
-    let progreso = if let Ok(ps_id) = row.get::<_, i64>(13) {
-        Some(ProgresoSerie {
-            id: Some(ps_id),
-            usuario_contenido_id: uc_id,
-            temporada_actual: row.get(14)?,
-            episodio_actual: row.get(15)?,
-            episodio_absoluto_actual: row.get(16)?,
-            actualizado_en: None,
-            metadata_temporadas: row.get::<_, Option<String>>(17).ok().flatten(),
-        })
+    let progreso = if let Some(ucid) = uc_id {
+        if let Ok(ps_id) = row.get::<_, i64>(13) {
+            Some(ProgresoSerie {
+                id: Some(ps_id),
+                usuario_contenido_id: ucid,
+                temporada_actual: row.get(14)?,
+                episodio_actual: row.get(15)?,
+                episodio_absoluto_actual: row.get(16)?,
+                actualizado_en: None,
+                metadata_temporadas: row.get::<_, Option<String>>(17).ok().flatten(),
+            })
+        } else {
+            None
+        }
     } else {
         None
     };
     
     Ok(RecomendacionHoy {
         contenido,
-        estado: Some(estado),
+        estado,
         progreso,
     })
 }
@@ -1225,7 +1224,7 @@ pub fn get_recomendacion_by_contenido_id(contenido_id: i64) -> Result<Recomendac
                 c.last_air_date,
                 c.duracion
          FROM contenido c
-         JOIN usuario_contenido uc ON c.id = uc.contenido_id
+         LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
          LEFT JOIN progreso_serie ps ON uc.id = ps.usuario_contenido_id
          LEFT JOIN (
             SELECT tt.contenido_id,
@@ -1413,6 +1412,7 @@ pub fn update_contenido_enrichment(
     status: Option<&str>,
     last_air_date: Option<&str>,
     duracion: Option<i64>,
+    backdrop_url: Option<&str>,
 ) -> Result<()> {
     let conn = get_connection()?;
     conn.execute(
@@ -1426,8 +1426,9 @@ pub fn update_contenido_enrichment(
             status = COALESCE(?7, status),
             last_air_date = COALESCE(?8, last_air_date),
             duracion = COALESCE(?9, duracion),
+            backdrop_url = COALESCE(?10, backdrop_url),
             last_metadata_fetch_error = NULL
-         WHERE id = ?10",
+         WHERE id = ?11",
         params![
             director,
             creadores,
@@ -1438,6 +1439,7 @@ pub fn update_contenido_enrichment(
             status,
             last_air_date,
             duracion,
+            backdrop_url,
             contenido_id
         ],
     )?;
@@ -1454,3 +1456,159 @@ pub fn get_contenido_enrichment_params(id: i64) -> Result<(Option<i64>, Option<i
 }
 
 
+
+pub fn omitir_en_progreso(state: &DbState, contenido_id: i64) -> Result<()> {
+    let mut omitted = state.omitted_en_progreso_session.lock().unwrap();
+    omitted.insert(contenido_id);
+    Ok(())
+}
+
+pub fn get_catalogo() -> Result<Vec<crate::models::ResultadoBusqueda>> {
+    let conn = get_connection()?;
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.tmdb_id, c.mal_id, c.tipo, c.es_anime, c.titulo, 
+                c.titulo_original, c.poster_url, c.backdrop_url, c.sinopsis, 
+                c.fecha_estreno, c.generos, uc.estado
+         FROM catalogo_offline co
+         JOIN contenido c ON co.contenido_id = c.id
+         LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
+         WHERE c.poster_url IS NOT NULL AND TRIM(c.poster_url) != ''
+         ORDER BY co.fecha_agregado DESC"
+    )?;
+
+    let home_dir = dirs::home_dir()
+        .or_else(|| std::env::var("USERPROFILE").map(PathBuf::from).ok())
+        .unwrap_or_else(|| PathBuf::from(""));
+    let cache_dir = home_dir.join(".queveohoy").join("cache_posters");
+
+    let resolve_poster = |id: i64, raw_path: Option<String>| -> Option<String> {
+        raw_path.map(|path| {
+            if path.starts_with("http://") || path.starts_with("https://") {
+                path
+            } else {
+                let full_path = cache_dir.join(format!("{}.jpg", id));
+                if full_path.exists() {
+                    full_path.to_string_lossy().to_string()
+                } else if path.starts_with('/') {
+                    format!("https://image.tmdb.org/t/p/w500{}", path)
+                } else {
+                    path
+                }
+            }
+        })
+    };
+
+    let resolve_backdrop = |raw_path: Option<String>| -> Option<String> {
+        raw_path.map(|path| {
+            if path.starts_with("http://") || path.starts_with("https://") {
+                path
+            } else if path.starts_with('/') {
+                format!("https://image.tmdb.org/t/p/w1280{}", path)
+            } else {
+                path
+            }
+        })
+    };
+
+    let mut items = Vec::new();
+    let mut rows = stmt.query([])?;
+    let mut seen_ids = std::collections::HashSet::new();
+
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let tmdb_id: Option<i64> = row.get(1)?;
+        let mal_id: Option<i64> = row.get(2)?;
+        let key = if let Some(t) = tmdb_id {
+            format!("tmdb_{}", t)
+        } else if let Some(m) = mal_id {
+            format!("mal_{}", m)
+        } else {
+            let t: String = row.get(5)?;
+            format!("title_{}", t)
+        };
+        seen_ids.insert(key);
+
+        let raw_poster: Option<String> = row.get(7)?;
+        let poster_url = resolve_poster(id, raw_poster);
+
+        let raw_backdrop: Option<String> = row.get(8)?;
+        let backdrop_url = resolve_backdrop(raw_backdrop);
+
+        let estado: Option<String> = row.get(12)?;
+        let ya_en_biblioteca = estado.is_some();
+        let es_anime_raw: i64 = row.get(4)?;
+        items.push(crate::models::ResultadoBusqueda {
+            tmdb_id,
+            mal_id,
+            tipo: row.get(3)?,
+            es_anime: es_anime_raw == 1,
+            titulo: row.get(5)?,
+            titulo_original: row.get(6)?,
+            poster_url,
+            backdrop_url,
+            sinopsis: row.get(9)?,
+            fecha_estreno: row.get(10)?,
+            generos: row.get(11)?,
+            ya_en_biblioteca,
+            estado_actual: estado,
+        });
+    }
+
+    if items.len() < 80 {
+        let mut stmt2 = conn.prepare(
+            "SELECT c.id, c.tmdb_id, c.mal_id, c.tipo, c.es_anime, c.titulo, 
+                    c.titulo_original, c.poster_url, c.backdrop_url, c.sinopsis, 
+                    c.fecha_estreno, c.generos, uc.estado
+             FROM contenido c
+             LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
+             WHERE c.poster_url IS NOT NULL AND TRIM(c.poster_url) != ''
+             ORDER BY c.id DESC
+             LIMIT 150"
+        )?;
+        let mut rows2 = stmt2.query([])?;
+        while let Some(row) = rows2.next()? {
+            let id: i64 = row.get(0)?;
+            let tmdb_id: Option<i64> = row.get(1)?;
+            let mal_id: Option<i64> = row.get(2)?;
+            let key = if let Some(t) = tmdb_id {
+                format!("tmdb_{}", t)
+            } else if let Some(m) = mal_id {
+                format!("mal_{}", m)
+            } else {
+                let t: String = row.get(5)?;
+                format!("title_{}", t)
+            };
+            if seen_ids.contains(&key) {
+                continue;
+            }
+            seen_ids.insert(key);
+
+            let raw_poster: Option<String> = row.get(7)?;
+            let poster_url = resolve_poster(id, raw_poster);
+
+            let raw_backdrop: Option<String> = row.get(8)?;
+            let backdrop_url = resolve_backdrop(raw_backdrop);
+
+            let estado: Option<String> = row.get(12)?;
+            let ya_en_biblioteca = estado.is_some();
+            let es_anime_raw: i64 = row.get(4)?;
+            items.push(crate::models::ResultadoBusqueda {
+                tmdb_id,
+                mal_id,
+                tipo: row.get(3)?,
+                es_anime: es_anime_raw == 1,
+                titulo: row.get(5)?,
+                titulo_original: row.get(6)?,
+                poster_url,
+                backdrop_url,
+                sinopsis: row.get(9)?,
+                fecha_estreno: row.get(10)?,
+                generos: row.get(11)?,
+                ya_en_biblioteca,
+                estado_actual: estado,
+            });
+        }
+    }
+
+    Ok(items)
+}

@@ -17,6 +17,7 @@ interface HoyViewProps {
   onAnterior: () => void;
   onUpdateRecomendacion: (updates: any) => void;
   onShowToast: (msg: string) => void;
+  onSaltarEnProgreso?: () => Promise<void> | void;
   loading: boolean;
 }
 
@@ -36,6 +37,7 @@ export const HoyView: React.FC<HoyViewProps> = ({
   onAnterior,
   onUpdateRecomendacion,
   onShowToast,
+  onSaltarEnProgreso,
   loading
 }) => {
   const [isSinopsisOpen, setIsSinopsisOpen] = useState(false);
@@ -101,6 +103,26 @@ export const HoyView: React.FC<HoyViewProps> = ({
     onSiguiente(true);
   };
 
+  const handleSaltarEnProgreso = async () => {
+    if (isSpinning || loading || !contenido) return;
+    setIsSinopsisOpen(false);
+    setFrozenContenido(effectiveRecomendacion?.contenido || null);
+    setNextContenido(null);
+    setIsSpinning(true);
+    if (onSaltarEnProgreso) {
+      await onSaltarEnProgreso();
+    } else {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("omitir_todos_en_progreso");
+        onSiguiente(false);
+      } catch (e) {
+        console.error("Error al saltar en progreso:", e);
+        setIsSpinning(false);
+      }
+    }
+  };
+
   const handleSpinComplete = () => {
     setIsSpinning(false);
     setFrozenContenido(null);
@@ -136,7 +158,9 @@ export const HoyView: React.FC<HoyViewProps> = ({
 
   const backdropUrl = displayContenido?.backdrop_url?.startsWith("http")
     ? displayContenido.backdrop_url
-    : (displayContenido?.backdrop_url ? convertFileSrc(displayContenido.backdrop_url) : "");
+    : (displayContenido?.backdrop_url?.startsWith("/")
+        ? `https://image.tmdb.org/t/p/w1280${displayContenido.backdrop_url}`
+        : (displayContenido?.backdrop_url ? convertFileSrc(displayContenido.backdrop_url) : ""));
 
   const parsedCreadores = useMemo(
     () => parseCreadores(displayContenido?.creadores),
@@ -229,6 +253,15 @@ export const HoyView: React.FC<HoyViewProps> = ({
     return "";
   })();
 
+  const temporadasTexto = (() => {
+    if (!displayContenido || displayContenido.tipo === "MOVIE") return "";
+    const total = displayContenido.total_temporadas;
+    if (typeof total === "number" && total > 0) {
+      return total === 1 ? "1 temporada" : `${total} temporadas`;
+    }
+    return "";
+  })();
+
   const puntuacionTexto = (() => {
     if (puntuacion) {
       const num = Number(puntuacion);
@@ -245,8 +278,9 @@ export const HoyView: React.FC<HoyViewProps> = ({
     if (cont?.id && cont?.tmdb_id) {
       const needsEnrichment =
         !cont.providers_updated_at ||
+        !cont.backdrop_url ||
         (cont.tipo === "MOVIE" && (cont.duracion == null || cont.duracion === 0)) ||
-        (cont.tipo !== "MOVIE" && !cont.status);
+        (cont.tipo !== "MOVIE" && (cont.status == null || cont.total_temporadas == null));
 
       if (needsEnrichment && !cont.fetch_recently_failed) {
         invoke<any>("enriquecer_contenido", { id: cont.id })
@@ -266,6 +300,7 @@ export const HoyView: React.FC<HoyViewProps> = ({
     displayContenido?.providers_updated_at,
     displayContenido?.duracion,
     displayContenido?.status,
+    displayContenido?.total_temporadas,
   ]);
 
   const openProgressModal = async () => {
@@ -452,8 +487,8 @@ export const HoyView: React.FC<HoyViewProps> = ({
     <div className="relative isolate w-full h-[calc(100vh-3.5rem)] overflow-hidden flex flex-col justify-center items-center px-4 select-none">
       {/* FONDO AMBIENTAL MULTICAPA CON IMAGEN REAL Y TRANSICIÓN SUAVE */}
       <AmbientBackdrop
-        backdropUrl={displayContenido?.backdrop_url}
-        posterUrl={displayContenido?.poster_url}
+        backdropUrl={backdropUrl}
+        posterUrl={posterUrl}
       />
 
       {/* 1. ZONA CENTRAL: CARRUSEL CINEMATOGRÁFICO 3D (ELEVADO Y PROTAGONISTA) */}
@@ -521,6 +556,7 @@ export const HoyView: React.FC<HoyViewProps> = ({
           titulo={displayContenido?.titulo || (loading ? "Cargando..." : "Sin recomendación")}
           anio={anioTexto}
           duracion={duracionTexto}
+          temporadas={temporadasTexto}
           puntuacion={puntuacionTexto}
           generos={parsedGeneros}
           sinopsis={displayContenido?.sinopsis || displayContenido?.descripcion || "Sin descripción disponible."}
@@ -540,6 +576,7 @@ export const HoyView: React.FC<HoyViewProps> = ({
           onMarkWatched={() => handleUpdateEstado("terminada", true)}
           onSave={() => handleUpdateEstado("pendiente", true)}
           onNext={handleStartSpin}
+          onSaltarEnProgreso={handleSaltarEnProgreso}
           disabled={isSpinning}
         />
       </div>

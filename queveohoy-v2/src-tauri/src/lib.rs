@@ -35,11 +35,48 @@ async fn backfill_metadata_cache() -> Result<tmdb::BackfillReport, String> {
 }
 
 #[tauri::command]
-fn get_recommendation(generos: Option<Vec<String>>, state: State<'_, DbState>) -> Result<Option<RecomendacionHoy>, String> {
-    db::get_recomendacion_de_hoy(&state, generos).map_err(|e| {
+async fn get_recommendation(generos: Option<Vec<String>>, state: State<'_, DbState>) -> Result<Option<RecomendacionHoy>, String> {
+    let rec = db::get_recomendacion_de_hoy(&state, generos).map_err(|e| {
         eprintln!("DB ERROR: {:?}", e);
         e.to_string()
-    })
+    })?;
+
+    if let Some(mut r) = rec {
+        let should_enrich = r.contenido.id.is_some()
+            && r.contenido.tmdb_id.is_some()
+            && r.contenido.fetch_recently_failed != Some(true)
+            && (
+                r.contenido.providers_updated_at.is_none()
+                || r.contenido.backdrop_url.is_none()
+                || (r.contenido.tipo == "MOVIE" && (r.contenido.duracion.is_none() || r.contenido.duracion == Some(0)))
+                || (r.contenido.tipo != "MOVIE" && (r.contenido.status.is_none() || r.contenido.total_temporadas.is_none()))
+            );
+
+        if should_enrich {
+            if let Some(cid) = r.contenido.id {
+                let enrich_task = tokio::spawn(async move {
+                    tmdb::fetch_and_apply_enrichment(cid).await
+                });
+                match tokio::time::timeout(std::time::Duration::from_millis(3500), enrich_task).await {
+                    Ok(Ok(Ok(enriched))) => {
+                        r.contenido = enriched;
+                    }
+                    Ok(Ok(Err(e))) => {
+                        eprintln!("[get_recommendation] Error en enriquecimiento preventivo: {}", e);
+                    }
+                    Ok(Err(join_err)) => {
+                        eprintln!("[get_recommendation] Error de join en enriquecimiento: {}", join_err);
+                    }
+                    Err(_) => {
+                        eprintln!("[get_recommendation] Timeout (3.5s) en enriquecimiento preventivo para contenido {} (continuará en background)", cid);
+                    }
+                }
+            }
+        }
+        Ok(Some(r))
+    } else {
+        Ok(None)
+    }
 }
 
 #[tauri::command]
@@ -124,6 +161,22 @@ fn omitir_todos_en_progreso(state: tauri::State<'_, DbState>) -> Result<(), Stri
 }
 
 #[tauri::command]
+fn omitir_en_progreso(id: i64, state: tauri::State<'_, DbState>) -> Result<(), String> {
+    db::omitir_en_progreso(&state, id).map_err(|e| {
+        eprintln!("DB ERROR (omitir_en_progreso): {:?}", e);
+        e.to_string()
+    })
+}
+
+#[tauri::command]
+fn get_catalogo() -> Result<Vec<models::ResultadoBusqueda>, String> {
+    db::get_catalogo().map_err(|e| {
+        eprintln!("DB ERROR (get_catalogo): {:?}", e);
+        e.to_string()
+    })
+}
+
+#[tauri::command]
 fn abandonar_multiples(ids: Vec<i64>) -> Result<(), String> {
     db::abandonar_multiples(ids).map_err(|e| {
         eprintln!("DB ERROR (abandonar_multiples): {:?}", e);
@@ -188,6 +241,8 @@ pub fn run() {
             fetch_metadata_temporadas,
             backfill_metadata_cache,
             omitir_todos_en_progreso,
+            omitir_en_progreso,
+            get_catalogo,
             abandonar_multiples,
             get_generos_disponibles_hoy,
             buscar_online,

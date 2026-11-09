@@ -1,10 +1,11 @@
 import React from "react";
-import { Calendar, Clock, Star, Edit3 } from "lucide-react";
+import { Calendar, Clock, Star, Edit3, Tv } from "lucide-react";
 
 interface ContentMetadataProps {
   titulo: string;
   anio: string;
   duracion: string;
+  temporadas?: string;
   puntuacion?: string;
   generos: string[];
   sinopsis: string;
@@ -22,6 +23,7 @@ export const ContentMetadata: React.FC<ContentMetadataProps> = ({
   titulo,
   anio,
   duracion,
+  temporadas,
   puntuacion,
   generos,
   sinopsis,
@@ -43,7 +45,7 @@ export const ContentMetadata: React.FC<ContentMetadataProps> = ({
         {titulo || "Cargando..."}
       </h2>
 
-      {/* 2. Ficha técnica integrada (Tipo, Año, Duración, Puntuación) */}
+      {/* 2. Ficha técnica integrada (Tipo, Año, Duración / Temporadas, Puntuación) */}
       <div className="text-xs text-zinc-300 flex items-center justify-center gap-2.5 flex-wrap">
         {tipo && (
           <span className="bg-violet-950/70 border border-violet-500/30 text-violet-300 text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wider">
@@ -62,6 +64,15 @@ export const ContentMetadata: React.FC<ContentMetadataProps> = ({
             <span className="flex items-center gap-1 text-zinc-300">
               <Clock size={12} className="text-zinc-400" />
               <span>{duracion}</span>
+            </span>
+          </>
+        )}
+        {temporadas && !duracion && (
+          <>
+            <span className="text-zinc-600 text-[10px]">•</span>
+            <span className="flex items-center gap-1 text-zinc-300">
+              <Tv size={12} className="text-zinc-400" />
+              <span>{temporadas}</span>
             </span>
           </>
         )}

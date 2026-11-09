@@ -137,6 +137,16 @@ function App() {
     });
   };
 
+  const handleSaltarEnProgreso = async () => {
+    try {
+      await invoke("omitir_todos_en_progreso");
+      setRecomendacion(null);
+      await loadRecommendation();
+    } catch (error) {
+      console.error("Error al saltar en progreso:", error);
+    }
+  };
+
   const handleReanudar = (item: any) => {
     setLoading(false);
     setRecomendacion({ ...item });
@@ -321,6 +331,7 @@ function App() {
                 onAnterior={handleAnterior}
                 onUpdateRecomendacion={handleUpdateRecomendacion}
                 onShowToast={setToastMessage}
+                onSaltarEnProgreso={handleSaltarEnProgreso}
                 loading={loading}
               />
             </ErrorBoundary>

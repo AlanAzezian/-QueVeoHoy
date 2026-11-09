@@ -1,6 +1,22 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { Search, X, Loader2, Film, Tv, Play, Plus, Check, BookmarkCheck, CheckCircle2, Sparkles } from "lucide-react";
+import {
+  Search,
+  X,
+  Loader2,
+  Film,
+  Tv,
+  Play,
+  Plus,
+  Check,
+  BookmarkCheck,
+  CheckCircle2,
+  Sparkles,
+  Filter,
+  RotateCcw,
+  Tag,
+  ChevronDown
+} from "lucide-react";
 
 export interface ResultadoBusqueda {
   tmdb_id: number | null;
@@ -32,36 +48,226 @@ interface ObraBusquedaPayload {
   generos?: string | null;
 }
 
+interface GeneroConteo {
+  nombre: string;
+  count: number;
+}
+
 interface BuscarViewProps {
   onShowToast?: (message: string) => void;
   onReanudar?: (item: any) => void;
 }
 
-type TipoFiltro = "todos" | "peliculas" | "series" | "anime";
+export type TipoContenido = "peliculas" | "series" | "anime";
 
-const FILTROS: { id: TipoFiltro; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
-  { id: "todos", label: "Todos", icon: Sparkles },
+const TIPOS_CONFIG: {
+  id: TipoContenido;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+}[] = [
   { id: "peliculas", label: "Películas", icon: Film },
   { id: "series", label: "Series", icon: Tv },
   { id: "anime", label: "Anime", icon: Sparkles },
 ];
 
+const GENRES_FALLBACK = [
+  "Acción",
+  "Aventura",
+  "Animación",
+  "Comedia",
+  "Crimen",
+  "Documental",
+  "Drama",
+  "Familia",
+  "Fantasía",
+  "Historia",
+  "Terror",
+  "Música",
+  "Misterio",
+  "Romance",
+  "Ciencia Ficción",
+  "Suspenso",
+  "Bélico",
+  "Western"
+];
+
+function normalizeGenre(str: string): string {
+  return str
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function parseGeneros(generosRaw?: string | null): string[] {
+  if (!generosRaw) return [];
+  try {
+    const parsed = JSON.parse(generosRaw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // Fallback a separado por comas
+  }
+  if (typeof generosRaw === "string") {
+    return generosRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+/**
+ * Resuelve la URL o ruta local del póster de forma infalible:
+ * - Si es http/https, la devuelve directamente.
+ * - Si empieza con '/' (path relativo de TMDB), antepone el CDN de TMDB w500.
+ * - Si es una ruta absoluta en el disco local, la pasa por convertFileSrc.
+ */
+export function resolvePosterSrc(rawPoster?: string | null): string {
+  if (!rawPoster) return "";
+  const trimmed = rawPoster.trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("/")) {
+    return `https://image.tmdb.org/t/p/w500${trimmed}`;
+  }
+  return convertFileSrc(trimmed);
+}
+
+/**
+ * LÓGICA DE CLASIFICACIÓN DEFINITIVA (ETAPA 5.1.1):
+ * 1. Sin filtros / Todos / Los tres -> Todo el catálogo
+ * 2. Solo Películas -> Películas no anime
+ * 3. Solo Series -> Series no anime
+ * 4. Solo Anime -> Películas y series anime (no normales)
+ * 5. Películas + Series -> Películas y series no anime
+ * 6. Películas + Anime -> Películas anime exclusivamente
+ * 7. Series + Anime -> Series anime exclusivamente
+ */
+export function matchTipoSeleccionado(
+  item: ResultadoBusqueda,
+  tipos: TipoContenido[]
+): boolean {
+  const hasPelis = tipos.includes("peliculas");
+  const hasSeries = tipos.includes("series");
+  const hasAnime = tipos.includes("anime");
+
+  // Caso 1 u 8: Sin filtros, o los tres seleccionados -> Todo
+  if ((!hasPelis && !hasSeries && !hasAnime) || (hasPelis && hasSeries && hasAnime)) {
+    return true;
+  }
+
+  const esPeli = item.tipo === "MOVIE";
+  const esSerie = item.tipo === "TV";
+  const esAnime = Boolean(item.es_anime);
+
+  // Caso 2: Solo Películas -> Películas no anime
+  if (hasPelis && !hasSeries && !hasAnime) {
+    return esPeli && !esAnime;
+  }
+
+  // Caso 3: Solo Series -> Series no anime
+  if (!hasPelis && hasSeries && !hasAnime) {
+    return esSerie && !esAnime;
+  }
+
+  // Caso 4: Solo Anime -> Todo el anime (películas y series)
+  if (!hasPelis && !hasSeries && hasAnime) {
+    return esAnime;
+  }
+
+  // Caso 5: Películas + Series -> Películas y series no anime
+  if (hasPelis && hasSeries && !hasAnime) {
+    return (esPeli || esSerie) && !esAnime;
+  }
+
+  // Caso 6: Películas + Anime -> Exclusivamente películas anime
+  if (hasPelis && !hasSeries && hasAnime) {
+    return esPeli && esAnime;
+  }
+
+  // Caso 7: Series + Anime -> Exclusivamente series anime
+  if (!hasPelis && hasSeries && hasAnime) {
+    return esSerie && esAnime;
+  }
+
+  return true;
+}
+
 export function BuscarView({ onShowToast, onReanudar }: BuscarViewProps) {
   const [query, setQuery] = useState("");
-  const [filtro, setFiltro] = useState<TipoFiltro>("todos");
-  const [resultados, setResultados] = useState<ResultadoBusqueda[]>([]);
+  const [selectedTipos, setSelectedTipos] = useState<TipoContenido[]>([]);
+  const [selectedGeneros, setSelectedGeneros] = useState<string[]>([]);
+  const [catalogo, setCatalogo] = useState<ResultadoBusqueda[]>([]);
+  const [resultadosOnline, setResultadosOnline] = useState<ResultadoBusqueda[]>([]);
+  const [availableGenres, setAvailableGenres] = useState<GeneroConteo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
+  const [loadingCatalogo, setLoadingCatalogo] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
+
+  // Popover de géneros
+  const [isGenreOpen, setIsGenreOpen] = useState(false);
+  const [genreSearch, setGenreSearch] = useState("");
+  const popoverRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Debounce search effect
+  // 1. Cargar catálogo normal inicial y lista de géneros disponibles desde la base local
+  useEffect(() => {
+    let isMounted = true;
+    setLoadingCatalogo(true);
+
+    Promise.all([
+      invoke<ResultadoBusqueda[]>("get_catalogo").catch((err) => {
+        console.error("Error al cargar catálogo inicial:", err);
+        return [] as ResultadoBusqueda[];
+      }),
+      invoke<GeneroConteo[]>("get_generos_disponibles_hoy").catch((err) => {
+        console.error("Error al cargar géneros disponibles:", err);
+        return [] as GeneroConteo[];
+      })
+    ]).then(([cat, genres]) => {
+      if (!isMounted) return;
+      setCatalogo(cat || []);
+      if (genres && genres.length > 0) {
+        setAvailableGenres(genres);
+      } else {
+        setAvailableGenres(GENRES_FALLBACK.map((g) => ({ nombre: g, count: 0 })));
+      }
+      setLoadingCatalogo(false);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Cerrar popover de géneros al hacer clic fuera o pulsar Escape
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
+        setIsGenreOpen(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsGenreOpen(false);
+    };
+    if (isGenreOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      document.addEventListener("keydown", handleEscape);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [isGenreOpen]);
+
+  // 2. Debounce para búsqueda online en TMDB/Jikan cuando query >= 2 caracteres
   useEffect(() => {
     const trimmed = query.trim();
     if (trimmed.length < 2) {
-      setResultados([]);
+      setResultadosOnline([]);
       setLoading(false);
-      setHasSearched(false);
       return;
     }
 
@@ -70,25 +276,55 @@ export function BuscarView({ onShowToast, onReanudar }: BuscarViewProps) {
       try {
         const res = await invoke<ResultadoBusqueda[]>("buscar_online", {
           query: trimmed,
-          tipoFiltro: filtro === "todos" ? null : filtro,
+          tipoFiltro: null,
         });
-        setResultados(res || []);
-        setHasSearched(true);
+        setResultadosOnline(res || []);
       } catch (err) {
         console.error("Error buscando online:", err);
-        setResultados([]);
+        setResultadosOnline([]);
       } finally {
         setLoading(false);
       }
     }, 450);
 
     return () => clearTimeout(timer);
-  }, [query, filtro]);
+  }, [query]);
 
-  const handleClear = () => {
+  // 3. Manejadores de selección de filtros
+  const toggleTipo = (tipo: TipoContenido) => {
+    setSelectedTipos((prev) => {
+      const exists = prev.includes(tipo);
+      const next = exists ? prev.filter((t) => t !== tipo) : [...prev, tipo];
+      // Si el usuario seleccionó los tres, se normaliza a vacío (Todos)
+      if (next.length === 3) {
+        return [];
+      }
+      return next;
+    });
+  };
+
+  const handleSelectTodosTipos = () => {
+    setSelectedTipos([]);
+  };
+
+  const toggleGenero = (genero: string) => {
+    setSelectedGeneros((prev) => {
+      if (prev.includes(genero)) {
+        return prev.filter((g) => g !== genero);
+      } else {
+        return [...prev, genero];
+      }
+    });
+  };
+
+  const handleClearFiltros = () => {
+    setSelectedTipos([]);
+    setSelectedGeneros([]);
+  };
+
+  const handleClearQuery = () => {
     setQuery("");
-    setResultados([]);
-    setHasSearched(false);
+    setResultadosOnline([]);
     inputRef.current?.focus();
   };
 
@@ -98,7 +334,61 @@ export function BuscarView({ onShowToast, onReanudar }: BuscarViewProps) {
     return `${item.titulo}_${item.fecha_estreno || ""}`;
   };
 
-  const handleSave = async (item: ResultadoBusqueda, nuevoEstado: "pendiente" | "en_progreso" | "terminada") => {
+  // 4. Filtrado combinado en memoria de la fuente activa (Online o Catálogo normal)
+  const isOnlineSearchActive = query.trim().length >= 2;
+  const fuenteActiva = isOnlineSearchActive ? resultadosOnline : catalogo;
+
+  const filteredResultados = useMemo(() => {
+    return fuenteActiva.filter((item) => {
+      // A. Filtro por tipo de contenido con la tabla de reglas definitiva
+      if (!matchTipoSeleccionado(item, selectedTipos)) {
+        return false;
+      }
+
+      // B. Filtro por género (acumulativo e independiente: la obra debe contener todos los géneros elegidos)
+      if (selectedGeneros.length > 0) {
+        const itemGeneros = parseGeneros(item.generos);
+        const normItemGeneros = itemGeneros.map(normalizeGenre);
+
+        const matchesAllGenres = selectedGeneros.every((selectedG) => {
+          const normSel = normalizeGenre(selectedG);
+          return normItemGeneros.some(
+            (g) => g.includes(normSel) || normSel.includes(g)
+          );
+        });
+
+        if (!matchesAllGenres) {
+          return false;
+        }
+      }
+
+      // C. Filtro adicional de texto si el usuario escribió un carácter sobre el catálogo
+      if (!isOnlineSearchActive && query.trim().length === 1) {
+        const q = query.trim().toLowerCase();
+        const matchTitulo =
+          item.titulo.toLowerCase().includes(q) ||
+          (item.titulo_original && item.titulo_original.toLowerCase().includes(q));
+        if (!matchTitulo) return false;
+      }
+
+      return true;
+    });
+  }, [fuenteActiva, selectedTipos, selectedGeneros, isOnlineSearchActive, query]);
+
+  // Lista de géneros para el popover filtrados por el buscador interno
+  const filteredGenresList = useMemo(() => {
+    if (!genreSearch.trim()) return availableGenres;
+    const q = normalizeGenre(genreSearch);
+    return availableGenres.filter((g) => normalizeGenre(g.nombre).includes(q));
+  }, [availableGenres, genreSearch]);
+
+  const totalFiltrosActivos = selectedTipos.length + selectedGeneros.length;
+  const isTodosActive = selectedTipos.length === 0;
+
+  const handleSave = async (
+    item: ResultadoBusqueda,
+    nuevoEstado: "pendiente" | "en_progreso" | "terminada"
+  ) => {
     const key = getItemKey(item);
     setSavingKey(key);
 
@@ -122,14 +412,16 @@ export function BuscarView({ onShowToast, onReanudar }: BuscarViewProps) {
         estado: nuevoEstado,
       });
 
-      // Actualizar estado local inmediato de la tarjeta
-      setResultados(prev =>
-        prev.map(r =>
+      // Actualizar estado local inmediato tanto en catálogo como en online
+      const updater = (prev: ResultadoBusqueda[]) =>
+        prev.map((r) =>
           getItemKey(r) === key
             ? { ...r, ya_en_biblioteca: true, estado_actual: nuevoEstado }
             : r
-        )
-      );
+        );
+
+      setResultadosOnline(updater);
+      setCatalogo(updater);
 
       if (nuevoEstado === "en_progreso") {
         onShowToast?.(`"${item.titulo}" agregada a 'En progreso'`);
@@ -151,39 +443,159 @@ export function BuscarView({ onShowToast, onReanudar }: BuscarViewProps) {
 
   return (
     <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 py-6 flex flex-col gap-6">
-      {/* Header y Buscador */}
+      {/* 1. Header y Barra de Filtros */}
       <div className="flex flex-col gap-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold text-white flex items-center gap-2.5">
               <Search className="text-violet-500" size={24} />
-              Buscador Global
+              Buscador y Catálogo
             </h1>
             <p className="text-xs sm:text-sm text-zinc-400 mt-0.5">
-              Explora películas, series y anime para incorporar directamente a tu catálogo personal
+              Explora y combina filtros de tipo y género, o busca en vivo en TMDB y MyAnimeList
             </p>
           </div>
 
-          {/* Filtros de Categoría */}
-          <div className="flex items-center bg-zinc-900/90 rounded-xl p-1 border border-zinc-800/80 shadow-md self-start sm:self-auto">
-            {FILTROS.map(({ id, label, icon: Icon }) => (
+          {/* Controles de Filtros Principales (Tipos + Géneros + Limpiar) */}
+          <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-auto">
+            {/* Selector Multi-tipo de Contenido */}
+            <div className="flex items-center bg-zinc-900/90 rounded-xl p-1 border border-zinc-800/80 shadow-md">
               <button
-                key={id}
-                onClick={() => setFiltro(id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all cursor-pointer ${
-                  filtro === id
+                onClick={handleSelectTodosTipos}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                  isTodosActive
                     ? "bg-violet-600 text-white shadow-sm"
                     : "text-zinc-400 hover:text-zinc-200 hover:bg-white/5"
                 }`}
+                title="Mostrar todo el catálogo"
               >
-                <Icon size={14} />
-                <span>{label}</span>
+                <span>Todos</span>
               </button>
-            ))}
+
+              {TIPOS_CONFIG.map(({ id, label, icon: Icon }) => {
+                const isSelected = selectedTipos.includes(id);
+                return (
+                  <button
+                    key={id}
+                    onClick={() => toggleTipo(id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                      isSelected
+                        ? "bg-violet-600 text-white shadow-sm"
+                        : "text-zinc-400 hover:text-zinc-200 hover:bg-white/5"
+                    }`}
+                    title={
+                      isSelected
+                        ? `Quitar filtro de ${label}`
+                        : `Agregar filtro de ${label}`
+                    }
+                  >
+                    <Icon size={13} />
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Desplegable / Popover de Géneros */}
+            <div className="relative" ref={popoverRef}>
+              <button
+                onClick={() => setIsGenreOpen(!isGenreOpen)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer border shadow-sm ${
+                  selectedGeneros.length > 0
+                    ? "bg-violet-600/20 border-violet-500/50 text-violet-200"
+                    : "bg-zinc-900/90 hover:bg-zinc-800/90 border-zinc-800/80 text-zinc-300"
+                }`}
+                title="Filtrar por género"
+              >
+                <Tag size={13} className={selectedGeneros.length > 0 ? "text-violet-400" : "text-zinc-400"} />
+                <span>
+                  {selectedGeneros.length === 0
+                    ? "Géneros"
+                    : `Géneros (${selectedGeneros.length})`}
+                </span>
+                <ChevronDown size={13} className="text-zinc-400" />
+              </button>
+
+              {/* Popover flotante de selección de géneros */}
+              {isGenreOpen && (
+                <div className="absolute right-0 top-full mt-2 w-80 p-3.5 bg-zinc-900/95 backdrop-blur-xl border border-zinc-700/80 rounded-2xl shadow-2xl shadow-black/90 z-50 flex flex-col gap-3 animate-in fade-in zoom-in-95 duration-150">
+                  <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+                    <span className="text-xs font-semibold text-zinc-200 flex items-center gap-1.5">
+                      <Filter size={13} className="text-violet-400" />
+                      Filtrar por género
+                    </span>
+                    {selectedGeneros.length > 0 && (
+                      <button
+                        onClick={() => setSelectedGeneros([])}
+                        className="text-[11px] text-violet-400 hover:text-violet-300 font-medium cursor-pointer"
+                      >
+                        Desmarcar todos
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Input de búsqueda interna en lista de géneros */}
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={genreSearch}
+                      onChange={(e) => setGenreSearch(e.target.value)}
+                      placeholder="Buscar género..."
+                      className="w-full bg-zinc-950/80 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500"
+                    />
+                    {genreSearch && (
+                      <button
+                        onClick={() => setGenreSearch("")}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Chips seleccionables de géneros */}
+                  <div className="flex flex-wrap gap-1.5 max-h-56 overflow-y-auto pr-1">
+                    {filteredGenresList.map((g) => {
+                      const isSel = selectedGeneros.includes(g.nombre);
+                      return (
+                        <button
+                          key={g.nombre}
+                          onClick={() => toggleGenero(g.nombre)}
+                          className={`text-[11px] px-2.5 py-1 rounded-lg border font-medium transition-all cursor-pointer flex items-center gap-1 ${
+                            isSel
+                              ? "bg-violet-600/30 text-violet-200 border-violet-500/60 shadow-sm"
+                              : "bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-zinc-200 border-white/5"
+                          }`}
+                        >
+                          <span>{g.nombre}</span>
+                          {g.count > 0 && (
+                            <span className="text-[9px] text-zinc-500">
+                              ({g.count})
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Botón Limpiar Filtros cuando hay filtros activos */}
+            {totalFiltrosActivos > 0 && (
+              <button
+                onClick={handleClearFiltros}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-violet-300 hover:text-white bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/30 transition-all cursor-pointer shadow-sm"
+                title="Limpiar todos los filtros"
+              >
+                <RotateCcw size={12} />
+                <span>Limpiar filtros ({totalFiltrosActivos})</span>
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Input con Iconos y Debounce */}
+        {/* Input de Búsqueda con Iconos y Debounce */}
         <div className="relative w-full max-w-3xl">
           <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-500">
             <Search size={18} />
@@ -195,69 +607,138 @@ export function BuscarView({ onShowToast, onReanudar }: BuscarViewProps) {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Buscar por título (ej. Inception, Breaking Bad, Frieren)..."
             className="w-full bg-zinc-900/90 border border-zinc-800 text-white text-sm rounded-2xl pl-11 pr-11 py-3 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition-all placeholder-zinc-500 shadow-xl shadow-black/30"
-            autoFocus
           />
           <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
             {loading ? (
               <Loader2 size={18} className="animate-spin text-violet-400" />
             ) : query.length > 0 ? (
               <button
-                onClick={handleClear}
+                onClick={handleClearQuery}
                 className="text-zinc-500 hover:text-zinc-300 p-1 rounded-full transition-colors cursor-pointer"
-                title="Limpiar búsqueda"
+                title="Limpiar texto de búsqueda"
               >
                 <X size={16} />
               </button>
             ) : null}
           </div>
         </div>
+
+        {/* Fila de Filtros Activos con botones para desmarcarlos individualmente */}
+        {totalFiltrosActivos > 0 && (
+          <div className="flex items-center gap-2 flex-wrap text-xs pt-1">
+            <span className="text-zinc-500 font-medium flex items-center gap-1">
+              <Filter size={12} />
+              Filtros activos:
+            </span>
+
+            {/* Tipos activos */}
+            {selectedTipos.map((tipo) => {
+              const cfg = TIPOS_CONFIG.find((t) => t.id === tipo);
+              const Icon = cfg?.icon || Sparkles;
+              return (
+                <span
+                  key={tipo}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-600/20 text-violet-300 border border-violet-500/40 text-[11px] font-medium"
+                >
+                  <Icon size={11} />
+                  <span>{cfg?.label || tipo}</span>
+                  <button
+                    onClick={() => toggleTipo(tipo)}
+                    className="hover:text-white cursor-pointer ml-0.5"
+                    title={`Remover filtro ${cfg?.label}`}
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              );
+            })}
+
+            {/* Géneros activos */}
+            {selectedGeneros.map((gen) => (
+              <span
+                key={gen}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600/20 text-indigo-300 border border-indigo-500/40 text-[11px] font-medium"
+              >
+                <Tag size={11} />
+                <span>{gen}</span>
+                <button
+                  onClick={() => toggleGenero(gen)}
+                  className="hover:text-white cursor-pointer ml-0.5"
+                  title={`Remover filtro ${gen}`}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Contenido / Estados */}
-      {query.trim().length < 2 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center gap-3">
-          <div className="p-4 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-500">
-            <Search size={36} />
-          </div>
-          <h2 className="text-base font-semibold text-zinc-300">
-            Escribe el título de una película, serie o anime
-          </h2>
-          <p className="text-xs sm:text-sm text-zinc-500 max-w-md">
-            Busca en vivo en TMDB y MyAnimeList con filtros de categoría y agregalos en un clic a tu biblioteca.
+      {/* 2. Resultados / Catálogo / Estados */}
+      {loadingCatalogo && catalogo.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
+          <Loader2 size={36} className="animate-spin text-violet-500" />
+          <p className="text-sm text-zinc-400">Cargando catálogo...</p>
+        </div>
+      ) : loading && resultadosOnline.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
+          <Loader2 size={36} className="animate-spin text-violet-500" />
+          <p className="text-sm text-zinc-400">
+            Consultando TMDB y MyAnimeList...
           </p>
         </div>
-      ) : loading && resultados.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center gap-3">
-          <Loader2 size={36} className="animate-spin text-violet-500" />
-          <p className="text-sm text-zinc-400">Consultando catálogos online...</p>
-        </div>
-      ) : hasSearched && resultados.length === 0 ? (
+      ) : filteredResultados.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center gap-3">
           <div className="p-4 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-500">
             <Film size={36} />
           </div>
           <h2 className="text-base font-semibold text-zinc-300">
-            No se encontraron coincidencias para &quot;{query}&quot;
+            {isOnlineSearchActive
+              ? `No se encontraron resultados para "${query}" con los filtros seleccionados`
+              : "No se encontraron obras para los filtros seleccionados"}
           </h2>
           <p className="text-xs sm:text-sm text-zinc-500 max-w-md">
-            Prueba con otro término, verifica la ortografía o cambia el filtro de categoría.
+            {totalFiltrosActivos > 0
+              ? "Prueba a desmarcar algunos filtros de tipo o género para ampliar los resultados."
+              : "Prueba con otro término de búsqueda o verifica la ortografía."}
           </p>
+          {totalFiltrosActivos > 0 && (
+            <button
+              onClick={handleClearFiltros}
+              className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 shadow-md transition-all cursor-pointer"
+            >
+              <RotateCcw size={13} />
+              Limpiar filtros
+            </button>
+          )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-20">
-          {resultados.map((item) => {
-            const key = getItemKey(item);
-            const isSaving = savingKey === key;
-            return (
-              <ResultadoCard
-                key={key}
-                item={item}
-                isSaving={isSaving}
-                onSave={handleSave}
-                onReanudar={onReanudar}
-              />
-            );
-          })}
+        <div className="flex flex-col gap-3 pb-20">
+          {/* Contador de obras mostradas */}
+          <div className="flex items-center justify-between text-xs text-zinc-500 px-1">
+            <span>
+              {isOnlineSearchActive
+                ? `Mostrando ${filteredResultados.length} resultados online para "${query}"`
+                : `Mostrando ${filteredResultados.length} obras del catálogo`}
+            </span>
+          </div>
+
+          {/* Rejilla de Obras */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {filteredResultados.map((item) => {
+              const key = getItemKey(item);
+              const isSaving = savingKey === key;
+              return (
+                <ResultadoCard
+                  key={key}
+                  item={item}
+                  isSaving={isSaving}
+                  onSave={handleSave}
+                  onReanudar={onReanudar}
+                />
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -267,32 +748,31 @@ export function BuscarView({ onShowToast, onReanudar }: BuscarViewProps) {
 interface ResultadoCardProps {
   item: ResultadoBusqueda;
   isSaving: boolean;
-  onSave: (item: ResultadoBusqueda, estado: "pendiente" | "en_progreso" | "terminada") => void;
+  onSave: (
+    item: ResultadoBusqueda,
+    estado: "pendiente" | "en_progreso" | "terminada"
+  ) => void;
   onReanudar?: (item: any) => void;
 }
 
-function ResultadoCard({ item, isSaving, onSave, onReanudar }: ResultadoCardProps) {
+function ResultadoCard({
+  item,
+  isSaving,
+  onSave,
+  onReanudar,
+}: ResultadoCardProps) {
   const [imgError, setImgError] = useState(false);
 
   const year = item.fecha_estreno ? item.fecha_estreno.split("-")[0] : null;
 
   const generosList: string[] = React.useMemo(() => {
-    if (!item.generos) return [];
-    try {
-      const parsed = JSON.parse(item.generos);
-      if (Array.isArray(parsed)) return parsed.slice(0, 2);
-    } catch {
-      // Fallback
-    }
-    return [];
+    return parseGeneros(item.generos).slice(0, 3);
   }, [item.generos]);
 
-  const rawPoster = item.poster_url;
-  const posterSrc = rawPoster
-    ? rawPoster.startsWith("http")
-      ? rawPoster
-      : convertFileSrc(rawPoster)
-    : "";
+  // Resolución robusta del póster tanto para URLs absolutas de TMDB/Jikan como relativas de SQLite o locales
+  const posterSrc = React.useMemo(() => {
+    return resolvePosterSrc(item.poster_url);
+  }, [item.poster_url]);
 
   const renderBadge = () => {
     if (item.es_anime) {
@@ -400,7 +880,10 @@ function ResultadoCard({ item, isSaving, onSave, onReanudar }: ResultadoCardProp
           </h3>
 
           {item.titulo_original && item.titulo_original !== item.titulo && (
-            <p className="text-[11px] text-zinc-500 italic line-clamp-1" title={item.titulo_original}>
+            <p
+              className="text-[11px] text-zinc-500 italic line-clamp-1"
+              title={item.titulo_original}
+            >
               {item.titulo_original}
             </p>
           )}
