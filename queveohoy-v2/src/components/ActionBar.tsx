@@ -1,5 +1,5 @@
 import React from "react";
-import { Play, Check, Clock, ArrowRight, FastForward } from "lucide-react";
+import { Play, Check, Clock, ArrowRight } from "lucide-react";
 
 interface ActionBarProps {
   isEnProgreso: boolean;
@@ -8,7 +8,6 @@ interface ActionBarProps {
   onMarkWatched: () => void;
   onSave: () => void;
   onNext: () => void;
-  onSaltarEnProgreso?: () => void;
   disabled?: boolean;
 }
 
@@ -19,7 +18,6 @@ export const ActionBar: React.FC<ActionBarProps> = ({
   onMarkWatched,
   onSave,
   onNext,
-  onSaltarEnProgreso,
   disabled = false
 }) => {
   const isSeriesProgress = isEnProgreso && !isMovie;
@@ -57,20 +55,7 @@ export const ActionBar: React.FC<ActionBarProps> = ({
         <span>Guardar</span>
       </button>
 
-      {/* Botón Secundario 3: Saltar en progreso (disponible únicamente para obras en progreso) */}
-      {isEnProgreso && onSaltarEnProgreso && (
-        <button
-          onClick={onSaltarEnProgreso}
-          disabled={disabled}
-          className="group bg-neutral-950/80 hover:bg-neutral-900 backdrop-blur-md disabled:opacity-40 disabled:cursor-not-allowed border border-white/15 hover:border-violet-500/30 text-zinc-200 hover:text-white px-3.5 py-2 rounded-xl text-xs transition-colors duration-200 flex items-center gap-1.5 cursor-pointer shrink-0 shadow-md [text-shadow:_0_1px_2px_rgba(0,0,0,0.8)]"
-          title="Saltar recomendación en progreso para descubrir otra opción"
-        >
-          <FastForward size={13} className="text-zinc-400 group-hover:text-violet-400 transition-colors drop-shadow-sm" />
-          <span>Saltar en progreso</span>
-        </button>
-      )}
-
-      {/* Botón Secundario 4: Siguiente */}
+      {/* Botón Secundario 3: Siguiente */}
       <button
         onClick={onNext}
         disabled={disabled}

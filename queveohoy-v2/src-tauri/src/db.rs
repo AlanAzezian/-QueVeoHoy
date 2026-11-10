@@ -172,8 +172,104 @@ pub fn init_db() -> Result<()> {
     Ok(())
 }
 
-pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -> Result<Option<RecomendacionHoy>> {
+fn normalize_str(s: &str) -> String {
+    s.to_lowercase()
+     .chars()
+     .map(|c| match c {
+         'á' | 'à' | 'ä' | 'â' => 'a',
+         'é' | 'è' | 'ë' | 'ê' => 'e',
+         'í' | 'ì' | 'ï' | 'î' => 'i',
+         'ó' | 'ò' | 'ö' | 'ô' => 'o',
+         'ú' | 'ù' | 'ü' | 'û' => 'u',
+         'ñ' => 'n',
+         _ => c,
+     })
+     .collect()
+}
+
+fn parse_generos_vec(raw: Option<&str>) -> Vec<String> {
+    let raw = match raw {
+        Some(r) if !r.trim().is_empty() => r.trim(),
+        _ => return Vec::new(),
+    };
+    if let Ok(vec) = serde_json::from_str::<Vec<String>>(raw) {
+        return vec;
+    }
+    raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+}
+
+fn match_tipo(tipo: &str, es_anime: bool, tipos: Option<&[String]>) -> bool {
+    let tipos = match tipos {
+        Some(t) if !t.is_empty() => t,
+        _ => return true,
+    };
+    let has_pelis = tipos.iter().any(|t| t == "peliculas");
+    let has_series = tipos.iter().any(|t| t == "series");
+    let has_anime = tipos.iter().any(|t| t == "anime");
+
+    if (!has_pelis && !has_series && !has_anime) || (has_pelis && has_series && has_anime) {
+        return true;
+    }
+
+    let es_peli = tipo == "MOVIE";
+    let es_serie = tipo == "TV";
+
+    if has_pelis && !has_series && !has_anime {
+        return es_peli && !es_anime;
+    }
+    if !has_pelis && has_series && !has_anime {
+        return es_serie && !es_anime;
+    }
+    if !has_pelis && !has_series && has_anime {
+        return es_anime;
+    }
+    if has_pelis && has_series && !has_anime {
+        return (es_peli || es_serie) && !es_anime;
+    }
+    if has_pelis && !has_series && has_anime {
+        return es_peli && es_anime;
+    }
+    if !has_pelis && has_series && has_anime {
+        return es_serie && es_anime;
+    }
+    true
+}
+
+fn match_generos(raw_generos: Option<&str>, target_generos: Option<&[String]>) -> bool {
+    let targets = match target_generos {
+        Some(t) if !t.is_empty() => t,
+        _ => return true,
+    };
+    let item_gens: Vec<String> = parse_generos_vec(raw_generos)
+        .into_iter()
+        .map(|g| normalize_str(&g))
+        .collect();
+
+    targets.iter().all(|target| {
+        let norm_target = normalize_str(target);
+        item_gens.iter().any(|g| g.contains(&norm_target) || norm_target.contains(g.as_str()))
+    })
+}
+
+fn match_filtros(
+    tipo: &str,
+    es_anime: bool,
+    generos: Option<&str>,
+    tipos_filtro: Option<&[String]>,
+    generos_filtro: Option<&[String]>,
+) -> bool {
+    match_tipo(tipo, es_anime, tipos_filtro) && match_generos(generos, generos_filtro)
+}
+
+pub fn get_recomendacion_de_hoy(state: &DbState, filtros: Option<crate::models::FiltrosRecomendacion>) -> Result<Option<RecomendacionHoy>> {
     let conn = get_connection()?;
+
+    let (target_tipos, target_generos) = match &filtros {
+        Some(f) => (f.tipos.as_deref(), f.generos.as_deref()),
+        None => (None, None),
+    };
+    let has_active_filters = target_tipos.map(|t| !t.is_empty()).unwrap_or(false)
+        || target_generos.map(|g| !g.is_empty()).unwrap_or(false);
     
     // 1. Verificar cambio de día calendario y resetear omit_clause
     let today_str: String = conn.query_row("SELECT date('now', 'localtime')", [], |row| row.get(0))?;
@@ -214,7 +310,7 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
         }
     };
 
-    // 2. Try to find a series "en progreso"
+    // 2. Try to find a series "en progreso" (respetando filtros activos)
     let mut stmt = conn.prepare(&format!(
         "SELECT c.id, c.tmdb_id, c.mal_id, c.tipo, c.es_anime, c.titulo, 
                 c.titulo_original, c.poster_url, c.sinopsis, c.fecha_estreno, c.creado_en,
@@ -253,18 +349,27 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
     let mut rows = stmt.query([])?;
     
     while let Some(row) = rows.next()? {
-        in_progress_contents.push(map_recomendacion(&row)?);
+        let rec = map_recomendacion(&row)?;
+        if match_filtros(
+            &rec.contenido.tipo,
+            rec.contenido.es_anime,
+            rec.contenido.generos.as_deref(),
+            target_tipos,
+            target_generos,
+        ) {
+            in_progress_contents.push(rec);
+        }
     }
 
     if !in_progress_contents.is_empty() {
         let mut rng = rand::thread_rng();
         let selected = in_progress_contents.choose(&mut rng).cloned();
-        println!("[DEBUG Hoy] Recomendación encontrada en_progreso: {:?}", selected);
+        println!("[DEBUG Hoy] Recomendación encontrada en_progreso (con filtros): {:?}", selected);
         return Ok(selected);
     }
 
     // Helper closure to query available contents
-    let get_available = |conn: &Connection, ignore_omit: bool, active_generos: Option<&Vec<String>>| -> Result<Vec<Contenido>> {
+    let get_available = |conn: &Connection, ignore_omit: bool| -> Result<Vec<Contenido>> {
         let current_omit_clause = if ignore_omit { "".to_string() } else { omit_clause.clone() };
         let mut stmt = conn.prepare(&format!(
             "SELECT c.id, c.tmdb_id, c.mal_id, c.tipo, c.es_anime, c.titulo, 
@@ -292,7 +397,21 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
             let id: i64 = row.get(0)?;
+            let tipo_str: String = row.get(3)?;
+            let es_anime: bool = row.get::<_, Option<i64>>(4)?.unwrap_or(0) == 1;
             let generos_str: Option<String> = row.get(12).ok().flatten();
+
+            // Validación estricta de filtros (Tipo AND Géneros)
+            if !match_filtros(
+                &tipo_str,
+                es_anime,
+                generos_str.as_deref(),
+                target_tipos,
+                target_generos,
+            ) {
+                continue;
+            }
+
             let raw_backdrop: Option<String> = row.get::<_, Option<String>>(13).ok().flatten();
             let backdrop_url = raw_backdrop.map(|bp| {
                 if bp.starts_with("http://") || bp.starts_with("https://") {
@@ -312,24 +431,6 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
             let status: Option<String> = row.get::<_, Option<String>>(20).ok().flatten();
             let last_air_date: Option<String> = row.get::<_, Option<String>>(21).ok().flatten();
             let duracion: Option<i64> = row.get::<_, Option<i64>>(22).ok().flatten();
-            
-            // Check genres if provided
-            if let Some(target_gens) = active_generos {
-                if !target_gens.is_empty() {
-                    let mut has_match = false;
-                    if let Some(g_str) = &generos_str {
-                        for tg in target_gens {
-                            if g_str.contains(tg) {
-                                has_match = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !has_match {
-                        continue;
-                    }
-                }
-            }
 
             let raw_poster: Option<String> = row.get(7)?;
             let poster_url = raw_poster.map(|path| {
@@ -348,8 +449,8 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
                 id: Some(id),
                 tmdb_id: row.get(1)?,
                 mal_id: row.get(2)?,
-                tipo: row.get(3)?,
-                es_anime: row.get::<_, Option<i64>>(4)?.unwrap_or(0) == 1,
+                tipo: tipo_str,
+                es_anime,
                 titulo: row.get(5)?,
                 titulo_original: row.get(6)?,
                 poster_url,
@@ -373,31 +474,33 @@ pub fn get_recomendacion_de_hoy(state: &DbState, generos: Option<Vec<String>>) -
         Ok(results)
     };
 
-    // 2. Query catalogo_offline with omit and genres
-    let mut available_contents = get_available(&conn, false, generos.as_ref())?;
+    // 3. Query catalogo_offline with omit and filters
+    let mut available_contents = get_available(&conn, false)?;
 
-    // Check sanity: If < 15 virgin contents in DB without genre filter, wake up worker
-    let raw_virgin_count = get_available(&conn, false, None)?.len();
+    // Check sanity: If < 15 virgin contents in DB without filter, wake up worker
+    let raw_virgin_count = {
+        let mut stmt = conn.prepare("SELECT COUNT(*) FROM catalogo_offline co JOIN contenido c ON co.contenido_id = c.id LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id WHERE uc.estado IS NULL")?;
+        stmt.query_row([], |r| r.get::<_, usize>(0)).unwrap_or(0)
+    };
     if raw_virgin_count < 15 {
         println!("[DEBUG Hoy] Stock virgen es {} (< 15), despertando worker...", raw_virgin_count);
         crate::discovery::trigger_discovery();
     }
 
-    // Fallback 1: Clear omitted_in_session and retry (with genre filter)
+    // Fallback 1: Si no hay contenidos con omitidos de sesión, limpiar omitted_in_session y reintentar MANTENIENDO los filtros
     if available_contents.is_empty() {
         println!("[DEBUG Hoy] Fallback 1: Catálogo vacío con omitidos, limpiando omitted_in_session...");
         state.omitted_in_session.lock().unwrap().clear();
-        available_contents = get_available(&conn, true, generos.as_ref())?;
+        available_contents = get_available(&conn, true)?;
     }
 
-    // Fallback 2: Ignore genre filter
+    // Fallback 2: Si los filtros están activos y no hay coincidencias, devolvemos None (estado vacío sin alterar filtros)
     if available_contents.is_empty() {
-        println!("[DEBUG Hoy] Fallback 2: Catálogo aún vacío, ignorando filtro de género...");
-        available_contents = get_available(&conn, true, None)?;
-    }
-
-    if available_contents.is_empty() {
-        println!("[DEBUG Hoy] catalogo_offline está vacío incluso tras los fallbacks. Devolviendo null.");
+        if has_active_filters {
+            println!("[DEBUG Hoy] No hay contenidos que coincidan con los filtros activos. Devolviendo None.");
+            return Ok(None);
+        }
+        println!("[DEBUG Hoy] catalogo_offline está vacío sin filtros. Devolviendo None.");
         return Ok(None);
     }
 

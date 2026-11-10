@@ -35,8 +35,18 @@ async fn backfill_metadata_cache() -> Result<tmdb::BackfillReport, String> {
 }
 
 #[tauri::command]
-async fn get_recommendation(generos: Option<Vec<String>>, state: State<'_, DbState>) -> Result<Option<RecomendacionHoy>, String> {
-    let rec = db::get_recomendacion_de_hoy(&state, generos).map_err(|e| {
+async fn get_recommendation(
+    filtros: Option<models::FiltrosRecomendacion>,
+    generos: Option<Vec<String>>,
+    state: State<'_, DbState>
+) -> Result<Option<RecomendacionHoy>, String> {
+    let effective_filtros = filtros.or_else(|| {
+        generos.map(|g| models::FiltrosRecomendacion {
+            tipos: None,
+            generos: Some(g),
+        })
+    });
+    let rec = db::get_recomendacion_de_hoy(&state, effective_filtros).map_err(|e| {
         eprintln!("DB ERROR: {:?}", e);
         e.to_string()
     })?;

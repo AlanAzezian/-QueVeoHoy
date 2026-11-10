@@ -79,6 +79,12 @@ pub struct RecomendacionHoy {
     pub progreso: Option<ProgresoSerie>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct FiltrosRecomendacion {
+    pub tipos: Option<Vec<String>>,
+    pub generos: Option<Vec<String>>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AvanceResultado {
     pub temporada: i64,

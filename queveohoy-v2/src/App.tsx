@@ -5,6 +5,7 @@ import { BibliotecaView } from "./BibliotecaView";
 import { HistorialView } from "./HistorialView";
 import { HoyView } from "./HoyView";
 import { BuscarView } from "./BuscarView";
+import { FiltrosConfig } from "./utils/filters";
 import {
   Home,
   Calendar,
@@ -68,13 +69,23 @@ function App() {
     }
   }, [toastMessage]);
 
-  const loadRecommendation = async (retryCount = 0) => {
+  const [filtrosHoy, setFiltrosHoy] = useState<FiltrosConfig>({ tipos: [], generos: [] });
+  const filtrosHoyRef = useRef<FiltrosConfig>(filtrosHoy);
+  filtrosHoyRef.current = filtrosHoy;
+
+  const loadRecommendation = async (customFiltros?: FiltrosConfig, retryCount = 0) => {
     if (isFetchingRef.current && retryCount === 0) return;
     isFetchingRef.current = true;
     if (retryCount === 0) setLoading(true);
     
+    const activeFiltros = customFiltros !== undefined ? customFiltros : filtrosHoyRef.current;
+
     try {
-      let rec = await invoke("get_recommendation", { generos: null });
+      const hasFilters = (activeFiltros.tipos && activeFiltros.tipos.length > 0) || (activeFiltros.generos && activeFiltros.generos.length > 0);
+      let rec = await invoke("get_recommendation", {
+        filtros: hasFilters ? { tipos: activeFiltros.tipos, generos: activeFiltros.generos } : null,
+        generos: activeFiltros.generos && activeFiltros.generos.length > 0 ? activeFiltros.generos : null,
+      });
       setRecomendacion(rec);
     } catch (error) {
       console.error("Error loading recommendation:", error);
@@ -89,6 +100,23 @@ function App() {
       loadRecommendation();
     }
   }, [activeTab, recomendacion]);
+
+  const handleApplyFiltros = async (newFiltros: FiltrosConfig) => {
+    setFiltrosHoy(newFiltros);
+    filtrosHoyRef.current = newFiltros;
+    setForwardHistory([]);
+    setRecomendacion(null);
+    await loadRecommendation(newFiltros);
+  };
+
+  const handleClearFiltros = async () => {
+    const emptyFilters: FiltrosConfig = { tipos: [], generos: [] };
+    setFiltrosHoy(emptyFilters);
+    filtrosHoyRef.current = emptyFilters;
+    setForwardHistory([]);
+    setRecomendacion(null);
+    await loadRecommendation(emptyFilters);
+  };
 
   const handleSiguiente = async (registrarEnBitacora: boolean = true) => {
     if (recomendacion?.contenido) {
@@ -333,6 +361,9 @@ function App() {
                 onShowToast={setToastMessage}
                 onSaltarEnProgreso={handleSaltarEnProgreso}
                 loading={loading}
+                filtrosHoy={filtrosHoy}
+                onApplyFiltros={handleApplyFiltros}
+                onClearFiltros={handleClearFiltros}
               />
             </ErrorBoundary>
           </div>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { parseCreadores, parseReparto, parsePlataformas } from "./utils/enrichment";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { Info, X } from "lucide-react";
+import { Info, X, FastForward, Filter, RotateCcw } from "lucide-react";
 import { CinemaCarousel } from "./components/CinemaCarousel";
 import { PosterCard } from "./components/PosterCard";
 import { MysteryCard } from "./components/MysteryCard";
@@ -9,6 +9,8 @@ import { ContentMetadata } from "./components/ContentMetadata";
 import { ActionBar } from "./components/ActionBar";
 import { AmbientBackdrop } from "./components/AmbientBackdrop";
 import { SynopsisModal } from "./components/SynopsisModal";
+import { FilterPanel } from "./components/FilterPanel";
+import { FiltrosConfig, GeneroConteo, GENRES_FALLBACK } from "./utils/filters";
 
 interface HoyViewProps {
   recomendacion: any;
@@ -19,6 +21,9 @@ interface HoyViewProps {
   onShowToast: (msg: string) => void;
   onSaltarEnProgreso?: () => Promise<void> | void;
   loading: boolean;
+  filtrosHoy?: FiltrosConfig;
+  onApplyFiltros?: (filtros: FiltrosConfig) => void;
+  onClearFiltros?: () => void;
 }
 
 const getMetadata = (jsonStr: string | null) => {
@@ -38,9 +43,14 @@ export const HoyView: React.FC<HoyViewProps> = ({
   onUpdateRecomendacion,
   onShowToast,
   onSaltarEnProgreso,
-  loading
+  loading,
+  filtrosHoy = { tipos: [], generos: [] },
+  onApplyFiltros,
+  onClearFiltros
 }) => {
   const [isSinopsisOpen, setIsSinopsisOpen] = useState(false);
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
+  const [availableGenres, setAvailableGenres] = useState<GeneroConteo[]>([]);
   const [localProgreso, setLocalProgreso] = useState<any>(null);
   const [localEstado, setLocalEstado] = useState<string | null>(null);
 
@@ -57,14 +67,15 @@ export const HoyView: React.FC<HoyViewProps> = ({
   const [nextContenido, setNextContenido] = useState<any>(null);
   const [poolItems, setPoolItems] = useState<any[]>([]);
 
-  // Cargar catálogo de respaldo real al montar
+  // Cargar catálogo de respaldo real y lista de géneros disponibles al montar
   useEffect(() => {
     const fetchPool = async () => {
       try {
-        const [progreso, biblioteca, terminadas] = await Promise.all([
+        const [progreso, biblioteca, terminadas, genres] = await Promise.all([
           invoke<any[]>("get_en_progreso").catch(() => []),
           invoke<any[]>("get_biblioteca").catch(() => []),
-          invoke<any[]>("get_terminadas").catch(() => [])
+          invoke<any[]>("get_terminadas").catch(() => []),
+          invoke<GeneroConteo[]>("get_generos_disponibles_hoy").catch(() => [])
         ]);
         const allItems = [...progreso, ...biblioteca, ...terminadas]
           .map(it => it?.contenido)
@@ -74,12 +85,19 @@ export const HoyView: React.FC<HoyViewProps> = ({
           if (!map.has(c.id)) map.set(c.id, c);
         });
         setPoolItems(Array.from(map.values()));
+        if (genres && genres.length > 0) {
+          setAvailableGenres(genres);
+        } else {
+          setAvailableGenres(GENRES_FALLBACK.map((g) => ({ nombre: g, count: 0 })));
+        }
       } catch (err) {
         console.error("Error al cargar pool para ruleta:", err);
       }
     };
     fetchPool();
   }, []);
+
+  const totalFiltrosActivos = (filtrosHoy.tipos?.length || 0) + (filtrosHoy.generos?.length || 0);
 
   const lastRecomendacionRef = useRef<any>(recomendacion);
   if (recomendacion) {
@@ -491,95 +509,166 @@ export const HoyView: React.FC<HoyViewProps> = ({
         posterUrl={posterUrl}
       />
 
-      {/* 1. ZONA CENTRAL: CARRUSEL CINEMATOGRÁFICO 3D (ELEVADO Y PROTAGONISTA) */}
-      <div className="relative z-10 w-full flex items-center justify-center pt-3 pb-1">
-        <CinemaCarousel
-          activeId={contenido?.id}
-          hasPrevious={!!prevItem && !!prevPosterUrl}
-          leftCard={
-            <PosterCard
-              posterUrl={prevPosterUrl}
-              title={prevItem?.contenido?.titulo}
-              subtitle={prevItem?.contenido?.titulo_original}
-              isCenter={false}
-              progress={
-                prevItem?.estado === "en_progreso" && prevItem?.contenido?.tipo !== "MOVIE"
-                  ? { temp: prevTemp, ep: prevEp, percent: prevPercent }
-                  : null
-              }
-              onClick={onAnterior}
-            />
-          }
-          centerCard={
-            <PosterCard
-              posterUrl={posterUrl}
-              title={displayContenido?.titulo}
-              isCenter={true}
-              badge={
-                isEnProgreso ? (
-                  <div className="bg-[#140827] border border-violet-500/60 text-violet-100 text-[11px] font-bold tracking-wider uppercase px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.7)] subpixel-antialiased select-none">
-                    <span className="w-[7px] h-[7px] rounded-full bg-violet-400 shrink-0 ring-1 ring-violet-300/40" />
-                    <span className="leading-none">{displayContenido?.tipo === "MOVIE" ? "EN PROGRESO" : `T${currentSeason} · EN PROGRESO`}</span>
-                  </div>
-                ) : null
-              }
-              bottomAction={
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsSinopsisOpen(true);
-                  }}
-                  className="bg-[#0a0a0c] hover:bg-[#121217] text-white text-xs font-semibold tracking-wide px-3.5 py-1.5 rounded-full border border-white/25 cursor-pointer hover:border-violet-400 flex items-center gap-1.5 transition-colors whitespace-nowrap active:scale-95 shadow-[0_2px_8px_rgba(0,0,0,0.7)] select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 subpixel-antialiased"
-                >
-                  <Info size={14} className="text-violet-400 shrink-0" strokeWidth={2.2} />
-                  <span className="leading-none">Clic para ver sinopsis</span>
-                </button>
-              }
-            />
-          }
-          rightCard={
-            <MysteryCard onClick={handleStartSpin} />
-          }
-          onAnterior={onAnterior}
-          onSiguiente={handleStartSpin}
-          isSpinning={isSpinning}
-          currentContent={frozenContenido || contenido}
-          nextContent={nextContenido}
-          poolItems={poolItems}
-          onSpinComplete={handleSpinComplete}
-        />
+      {/* ZONA SUPERIOR DERECHA: BOTONES DE FILTROS Y SALTAR EN PROGRESO */}
+      <div className="absolute top-3.5 right-4 sm:top-5 sm:right-6 md:right-8 z-30 pointer-events-auto flex items-center gap-2 sm:gap-2.5">
+        {/* Botón de Filtros */}
+        <button
+          onClick={() => setIsFilterPanelOpen(true)}
+          className={`group flex items-center gap-1.5 px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-full border backdrop-blur-md text-sm font-semibold tracking-wide transition-all duration-200 cursor-pointer select-none active:scale-95 shadow-[0_2px_12px_rgba(0,0,0,0.7)] [text-shadow:_0_1px_2px_rgba(0,0,0,0.8)] focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${
+            totalFiltrosActivos > 0
+              ? "bg-violet-950/85 hover:bg-violet-900 border-violet-400/80 text-white shadow-violet-950/60"
+              : "bg-[#0e0b18]/80 hover:bg-[#171226] border-violet-500/35 hover:border-violet-400/70 text-zinc-200 hover:text-white"
+          }`}
+          title="Filtros de recomendación"
+        >
+          <Filter size={15} className={totalFiltrosActivos > 0 ? "text-violet-300" : "text-violet-400 group-hover:text-violet-300 transition-colors drop-shadow-sm shrink-0"} />
+          <span className="leading-none">Filtros</span>
+          {totalFiltrosActivos > 0 && (
+            <span className="w-5 h-5 rounded-full bg-violet-600 text-white text-[11px] font-bold flex items-center justify-center -mr-0.5 shadow-sm">
+              {totalFiltrosActivos}
+            </span>
+          )}
+        </button>
+
+        {/* Botón Saltar en progreso (disponible únicamente para obras en progreso) */}
+        {isEnProgreso && onSaltarEnProgreso && (
+          <button
+            onClick={handleSaltarEnProgreso}
+            disabled={isSpinning || loading}
+            className="group flex items-center gap-2 px-4 py-2 sm:px-4.5 sm:py-2.5 rounded-full bg-[#0e0b18]/80 hover:bg-[#171226] border border-violet-500/35 hover:border-violet-400/70 text-zinc-200 hover:text-white backdrop-blur-md text-sm font-semibold tracking-wide transition-all duration-200 shadow-[0_2px_12px_rgba(0,0,0,0.7)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed select-none active:scale-95 [text-shadow:_0_1px_2px_rgba(0,0,0,0.8)] focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+            title="Saltar recomendación en progreso para descubrir otra opción"
+          >
+            <FastForward size={15} className="text-violet-400 group-hover:text-violet-300 transition-colors drop-shadow-sm shrink-0" />
+            <span className="leading-none">Saltar en progreso</span>
+          </button>
+        )}
       </div>
 
-      {/* 2. ZONA INFERIOR: METADATA Y BOTONES INFERIORES */}
-      <div className="relative z-10 w-full max-w-xl mx-auto text-center flex flex-col items-center gap-1 -mt-1 pb-1">
-        <ContentMetadata
-          titulo={displayContenido?.titulo || (loading ? "Cargando..." : "Sin recomendación")}
-          anio={anioTexto}
-          duracion={duracionTexto}
-          temporadas={temporadasTexto}
-          puntuacion={puntuacionTexto}
-          generos={parsedGeneros}
-          sinopsis={displayContenido?.sinopsis || displayContenido?.descripcion || "Sin descripción disponible."}
-          isEnProgreso={isEnProgreso}
-          tipo={tipoTexto}
-          progreso={
-            isEnProgreso && displayContenido?.tipo !== "MOVIE"
-              ? { temp: currentSeason, ep: currentEp, percent }
-              : null
-          }
-          onEditProgress={openProgressModal}
-        />
-        <ActionBar
-          isEnProgreso={isEnProgreso}
-          isMovie={displayContenido?.tipo === "MOVIE"}
-          onPrimary={isEnProgreso && displayContenido?.tipo !== "MOVIE" ? handleAddProgress : () => handleUpdateEstado("en_progreso", false)}
-          onMarkWatched={() => handleUpdateEstado("terminada", true)}
-          onSave={() => handleUpdateEstado("pendiente", true)}
-          onNext={handleStartSpin}
-          onSaltarEnProgreso={handleSaltarEnProgreso}
-          disabled={isSpinning}
-        />
-      </div>
+      {/* CONTENIDO PRINCIPAL DE HOY (O ESTADO VACÍO CUANDO NO HAY COINCIDENCIAS) */}
+      {!displayContenido && !loading ? (
+        <div className="relative z-10 w-full max-w-md mx-auto flex flex-col items-center justify-center text-center p-8 rounded-3xl bg-[#0c0916]/85 border border-violet-500/30 backdrop-blur-xl shadow-2xl animate-in fade-in zoom-in-95 duration-200 my-auto">
+          <div className="w-14 h-14 rounded-2xl bg-violet-600/20 border border-violet-500/40 flex items-center justify-center text-violet-300 mb-4 shadow-lg shadow-violet-950/40">
+            <Filter size={26} />
+          </div>
+          <h2 className="text-xl font-bold text-white mb-2 tracking-tight">
+            No se encontraron recomendaciones
+          </h2>
+          <p className="text-sm text-zinc-300/90 leading-relaxed mb-6 max-w-sm">
+            {totalFiltrosActivos > 0
+              ? "Ningún contenido del catálogo coincide con todos los filtros activos de tipo y género."
+              : "No hay contenidos disponibles en este momento."}
+          </p>
+          <div className="flex items-center gap-3">
+            {totalFiltrosActivos > 0 && onClearFiltros && (
+              <button
+                onClick={onClearFiltros}
+                className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-semibold text-xs py-2.5 px-5 rounded-xl shadow-lg shadow-violet-950/50 border border-violet-400/30 flex items-center gap-2 cursor-pointer transition-all active:scale-95"
+              >
+                <RotateCcw size={14} />
+                <span>Limpiar filtros</span>
+              </button>
+            )}
+            <button
+              onClick={() => setIsFilterPanelOpen(true)}
+              className="bg-neutral-900/80 hover:bg-neutral-800 text-zinc-200 hover:text-white font-semibold text-xs py-2.5 px-4 rounded-xl border border-white/15 flex items-center gap-1.5 cursor-pointer transition-all"
+            >
+              <Filter size={14} className="text-violet-400" />
+              <span>Ajustar filtros</span>
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* 1. ZONA CENTRAL: CARRUSEL CINEMATOGRÁFICO 3D (ELEVADO Y PROTAGONISTA) */}
+          <div className="relative z-10 w-full flex items-center justify-center pt-3 pb-1">
+            <CinemaCarousel
+              activeId={contenido?.id}
+              hasPrevious={!!prevItem && !!prevPosterUrl}
+              leftCard={
+                <PosterCard
+                  posterUrl={prevPosterUrl}
+                  title={prevItem?.contenido?.titulo}
+                  subtitle={prevItem?.contenido?.titulo_original}
+                  isCenter={false}
+                  progress={
+                    prevItem?.estado === "en_progreso" && prevItem?.contenido?.tipo !== "MOVIE"
+                      ? { temp: prevTemp, ep: prevEp, percent: prevPercent }
+                      : null
+                  }
+                  onClick={onAnterior}
+                />
+              }
+              centerCard={
+                <PosterCard
+                  posterUrl={posterUrl}
+                  title={displayContenido?.titulo}
+                  isCenter={true}
+                  badge={
+                    isEnProgreso ? (
+                      <div className="bg-[#140827] border border-violet-500/60 text-violet-100 text-[11px] font-bold tracking-wider uppercase px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.7)] subpixel-antialiased select-none">
+                        <span className="w-[7px] h-[7px] rounded-full bg-violet-400 shrink-0 ring-1 ring-violet-300/40" />
+                        <span className="leading-none">{displayContenido?.tipo === "MOVIE" ? "EN PROGRESO" : `T${currentSeason} · EN PROGRESO`}</span>
+                      </div>
+                    ) : null
+                  }
+                  bottomAction={
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsSinopsisOpen(true);
+                      }}
+                      className="bg-[#0a0a0c] hover:bg-[#121217] text-white text-xs font-semibold tracking-wide px-3.5 py-1.5 rounded-full border border-white/25 cursor-pointer hover:border-violet-400 flex items-center gap-1.5 transition-colors whitespace-nowrap active:scale-95 shadow-[0_2px_8px_rgba(0,0,0,0.7)] select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 subpixel-antialiased"
+                    >
+                      <Info size={14} className="text-violet-400 shrink-0" strokeWidth={2.2} />
+                      <span className="leading-none">Clic para ver sinopsis</span>
+                    </button>
+                  }
+                />
+              }
+              rightCard={
+                <MysteryCard onClick={handleStartSpin} />
+              }
+              onAnterior={onAnterior}
+              onSiguiente={handleStartSpin}
+              isSpinning={isSpinning}
+              currentContent={frozenContenido || contenido}
+              nextContent={nextContenido}
+              poolItems={poolItems}
+              onSpinComplete={handleSpinComplete}
+            />
+          </div>
+
+          {/* 2. ZONA INFERIOR: METADATA Y BOTONES INFERIORES */}
+          <div className="relative z-10 w-full max-w-xl mx-auto text-center flex flex-col items-center gap-1 -mt-1 pb-1">
+            <ContentMetadata
+              titulo={displayContenido?.titulo || (loading ? "Cargando..." : "Sin recomendación")}
+              anio={anioTexto}
+              duracion={duracionTexto}
+              temporadas={temporadasTexto}
+              puntuacion={puntuacionTexto}
+              generos={parsedGeneros}
+              sinopsis={displayContenido?.sinopsis || displayContenido?.descripcion || "Sin descripción disponible."}
+              isEnProgreso={isEnProgreso}
+              tipo={tipoTexto}
+              progreso={
+                isEnProgreso && displayContenido?.tipo !== "MOVIE"
+                  ? { temp: currentSeason, ep: currentEp, percent }
+                  : null
+              }
+              onEditProgress={openProgressModal}
+            />
+            <ActionBar
+              isEnProgreso={isEnProgreso}
+              isMovie={displayContenido?.tipo === "MOVIE"}
+              onPrimary={isEnProgreso && displayContenido?.tipo !== "MOVIE" ? handleAddProgress : () => handleUpdateEstado("en_progreso", false)}
+              onMarkWatched={() => handleUpdateEstado("terminada", true)}
+              onSave={() => handleUpdateEstado("pendiente", true)}
+              onNext={handleStartSpin}
+              disabled={isSpinning}
+            />
+          </div>
+        </>
+      )}
 
       {/* 4. MODAL DE SINOPSIS EXTENDIDA */}
       <SynopsisModal
@@ -763,6 +852,19 @@ export const HoyView: React.FC<HoyViewProps> = ({
           </div>
         </div>
       )}
+      {/* 5. PANEL FLOTANTE DE FILTROS CONFIGURABLES */}
+      <FilterPanel
+        isOpen={isFilterPanelOpen}
+        onClose={() => setIsFilterPanelOpen(false)}
+        appliedFiltros={filtrosHoy}
+        onApply={(newFiltros) => {
+          onApplyFiltros?.(newFiltros);
+        }}
+        onClear={() => {
+          onClearFiltros?.();
+        }}
+        availableGenres={availableGenres}
+      />
     </div>
   );
 };
