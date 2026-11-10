@@ -162,8 +162,8 @@ export const AmbientBackdrop: React.FC<AmbientBackdropProps> = ({
       {/* 3. Overlay oscuro ultra sutil (5% para unificar paleta sin apagar luminancia) */}
       <div className="absolute inset-0 bg-[#080910]/5 pointer-events-none" />
 
-      {/* 4. Gradiente inferior localizado en el 50% inferior (protege ficha técnica y acciones sin oscurecer personajes ni escenarios) */}
-      <div className="absolute bottom-0 inset-x-0 h-1/2 bg-gradient-to-t from-[#080910]/95 via-[#080910]/35 to-transparent pointer-events-none" />
+      {/* 4. Gradiente inferior localizado (protege ficha técnica y acciones sin oscurecer personajes ni escenarios superiores) */}
+      <div className="absolute bottom-0 inset-x-0 h-[58%] bg-[linear-gradient(to_top,#080910_0%,rgba(8,9,16,0.88)_30%,rgba(8,9,16,0.45)_65%,transparent_100%)] pointer-events-none" />
 
       {/* 5. Viñeta radial moderada (centro 65% completamente transparente, bordes suaves a 35%) */}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_65%,rgba(8,9,16,0.35)_100%)] pointer-events-none" />
