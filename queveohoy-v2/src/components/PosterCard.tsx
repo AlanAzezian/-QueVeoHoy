@@ -71,7 +71,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
         {/* Acción inferior interactiva (con aislamiento de eventos para evitar clics duplicados) */}
         {bottomAction && (
           <div
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 pointer-events-auto"
+            className="absolute bottom-4 inset-x-0 flex justify-center z-20 pointer-events-auto"
             onClick={(e) => e.stopPropagation()}
           >
             {bottomAction}

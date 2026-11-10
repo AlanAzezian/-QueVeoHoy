@@ -89,7 +89,7 @@
 .carousel-card-left {
   transform: rotateY(14deg) translateZ(-20px) scale(0.88);
   transform-style: preserve-3d;
-  box-shadow: -18px 24px 45px rgba(0, 0, 0, 0.9), 0 0 25px rgba(139, 92, 246, 0.25);
+  box-shadow: -18px 24px 45px rgba(0, 0, 0, 0.9);
   border-top: 1px solid rgba(255, 255, 255, 0.18);
   border-left: 1px solid rgba(255, 255, 255, 0.12);
 }
@@ -97,7 +97,7 @@
 .carousel-card-right {
   transform: rotateY(-14deg) translateZ(-20px) scale(0.88);
   transform-style: preserve-3d;
-  box-shadow: 18px 24px 45px rgba(0, 0, 0, 0.9), 0 0 25px rgba(139, 92, 246, 0.25);
+  box-shadow: 18px 24px 45px rgba(0, 0, 0, 0.9);
   border-top: 1px solid rgba(255, 255, 255, 0.18);
   border-right: 1px solid rgba(255, 255, 255, 0.12);
 }
@@ -105,7 +105,7 @@
 .carousel-card-center {
   transform: rotateY(0deg) translateZ(20px) scale(1);
   transform-style: preserve-3d;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.95), 0 0 40px rgba(139, 92, 246, 0.35);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.95), 0 0 45px rgba(139, 92, 246, 0.4);
 }
 
 @media (prefers-reduced-motion: reduce) {

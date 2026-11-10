@@ -517,9 +517,9 @@ export const HoyView: React.FC<HoyViewProps> = ({
               isCenter={true}
               badge={
                 isEnProgreso ? (
-                  <div className="bg-violet-950/80 border border-violet-500/40 text-violet-200 text-[10px] font-semibold px-2.5 py-0.5 rounded-full backdrop-blur-md flex items-center gap-1.5 shadow-lg [text-shadow:_0_1px_2px_rgba(0,0,0,0.8)]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-                    <span>{displayContenido?.tipo === "MOVIE" ? "EN PROGRESO" : `T${currentSeason} · EN PROGRESO`}</span>
+                  <div className="bg-[#140827] border border-violet-500/60 text-violet-100 text-[11px] font-bold tracking-wider uppercase px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.7)] subpixel-antialiased select-none">
+                    <span className="w-[7px] h-[7px] rounded-full bg-violet-400 shrink-0 ring-1 ring-violet-300/40" />
+                    <span className="leading-none">{displayContenido?.tipo === "MOVIE" ? "EN PROGRESO" : `T${currentSeason} · EN PROGRESO`}</span>
                   </div>
                 ) : null
               }
@@ -529,10 +529,10 @@ export const HoyView: React.FC<HoyViewProps> = ({
                     e.stopPropagation();
                     setIsSinopsisOpen(true);
                   }}
-                  className="bg-black/70 backdrop-blur-md text-zinc-200 text-xs px-3 py-1 rounded-full border border-white/15 absolute bottom-3 left-1/2 -translate-x-1/2 cursor-pointer hover:border-violet-400 hover:text-white flex items-center gap-1.5 transition-all whitespace-nowrap active:scale-95 shadow-lg select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 [text-shadow:_0_1px_2px_rgba(0,0,0,0.8)]"
+                  className="bg-[#0a0a0c] hover:bg-[#121217] text-white text-xs font-semibold tracking-wide px-3.5 py-1.5 rounded-full border border-white/25 cursor-pointer hover:border-violet-400 flex items-center gap-1.5 transition-colors whitespace-nowrap active:scale-95 shadow-[0_2px_8px_rgba(0,0,0,0.7)] select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 subpixel-antialiased"
                 >
-                  <Info size={13} className="text-violet-400" />
-                  <span>Clic para ver sinopsis</span>
+                  <Info size={14} className="text-violet-400 shrink-0" strokeWidth={2.2} />
+                  <span className="leading-none">Clic para ver sinopsis</span>
                 </button>
               }
             />
