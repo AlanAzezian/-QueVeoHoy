@@ -27,5 +27,5 @@ reqwest = { version = "0.12", features = ["json", "blocking"] }
 rand = "0.8.5"
 dirs = "5.0.1"
 dotenvy = "0.15.7"
-tokio = { version = "1.53.1", features = ["time"] }
+tokio = { version = "1.53.1", features = ["time", "sync", "macros"] }
 

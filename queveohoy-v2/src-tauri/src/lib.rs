@@ -1,4 +1,4 @@
-mod models;
+pub mod models;
 pub mod db;
 mod tmdb;
 mod discovery;
@@ -91,14 +91,18 @@ async fn get_recommendation(
 
 #[tauri::command]
 fn mark_as_omitted(id: i64, registrar_en_bitacora: bool, state: State<'_, DbState>) -> Result<(), String> {
-    let estado = db::get_estado_contenido(id).unwrap_or_else(|_| "".to_string());
-    
-    if estado != "en_progreso" {
+    // 1. Persistencia primaria y autoritativa en SQLite
+    db::add_omitido_sesion(id).map_err(|e| {
+        format!("[mark_as_omitted] Error persistiendo descarte en SQLite: {:?}", e)
+    })?;
+
+    // 2. Sincronización inmediata en memoria para la sesión activa
+    {
         let mut omitted = state.omitted_in_session.lock().unwrap();
         omitted.insert(id);
-        let _ = db::add_omitido_sesion(id);
     }
     
+    // 3. Registro de auditoría en historial
     if registrar_en_bitacora {
         db::registrar_accion(id, "SIGUIENTE").map_err(|e| e.to_string())
     } else {
@@ -219,6 +223,14 @@ fn get_generos_disponibles_hoy() -> Result<Vec<models::GeneroConteo>, String> {
     })
 }
 
+#[tauri::command]
+fn get_stock_util_por_grupo() -> Result<models::StockGrupoInfo, String> {
+    db::get_stock_util_por_grupo().map_err(|e| {
+        eprintln!("DB ERROR (get_stock_util_por_grupo): {:?}", e);
+        e.to_string()
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if let Err(e) = db::init_db() {
@@ -257,7 +269,8 @@ pub fn run() {
             get_generos_disponibles_hoy,
             buscar_online,
             guardar_obra_busqueda,
-            enriquecer_contenido
+            enriquecer_contenido,
+            get_stock_util_por_grupo
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -29,6 +29,85 @@ pub fn get_cache_posters_dir() -> PathBuf {
     home_dir.join(".queveohoy").join("cache_posters")
 }
 
+pub fn es_url_poster_valida(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    trimmed.starts_with("http://") || trimmed.starts_with("https://") || trimmed.starts_with('/')
+}
+
+pub fn normalizar_poster_url_salida(raw: Option<String>) -> Option<String> {
+    let es_http_o_https = |s: &str| -> bool {
+        let bytes = s.as_bytes();
+        (bytes.len() >= 7 && bytes[..7].eq_ignore_ascii_case(b"http://"))
+            || (bytes.len() >= 8 && bytes[..8].eq_ignore_ascii_case(b"https://"))
+    };
+
+    let mut current = raw?.trim().to_string();
+    if current.is_empty() {
+        return None;
+    }
+
+    const TMDB_PREFIXES: [&str; 2] = [
+        "https://image.tmdb.org/t/p/w500",
+        "http://image.tmdb.org/t/p/w500",
+    ];
+
+    loop {
+        let mut stripped = None;
+        for prefix in TMDB_PREFIXES {
+            if let Some(rest) = current.strip_prefix(prefix) {
+                let rest_trimmed = rest.trim_start();
+                if es_http_o_https(rest_trimmed) {
+                    stripped = Some(rest_trimmed.to_string());
+                    break;
+                }
+            }
+        }
+        match stripped {
+            Some(next) => current = next,
+            None => break,
+        }
+    }
+
+    if current.is_empty() {
+        return None;
+    }
+    if es_http_o_https(&current) {
+        return Some(current);
+    }
+    if current.starts_with('/') {
+        return Some(format!("https://image.tmdb.org/t/p/w500{}", current));
+    }
+
+    let before_slash = current.split('/').next().unwrap_or("");
+    if let Some((scheme, _)) = before_slash.split_once(':') {
+        let is_explicit_scheme = !scheme.is_empty()
+            && scheme.bytes().enumerate().all(|(i, b)| {
+                if i == 0 {
+                    b.is_ascii_alphabetic()
+                } else {
+                    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.')
+                }
+            });
+        if is_explicit_scheme || current.contains("://") {
+            return None;
+        }
+    }
+
+    Some(format!("https://image.tmdb.org/t/p/w500/{}", current))
+}
+
+pub fn resolve_poster_salida(
+    cache_dir: &std::path::Path,
+    id: i64,
+    raw: Option<String>,
+) -> Option<String> {
+    let local_file = cache_dir.join(format!("{}.jpg", id));
+    if local_file.exists() {
+        return Some(local_file.to_string_lossy().to_string());
+    }
+    normalizar_poster_url_salida(raw)
+}
+
 pub fn get_connection() -> Result<Connection> {
     let db_path = get_db_path();
     let conn = Connection::open(db_path)?;
@@ -41,6 +120,10 @@ pub fn get_connection() -> Result<Connection> {
 
 pub fn init_db() -> Result<()> {
     let conn = get_connection()?;
+    init_db_conn(&conn)
+}
+
+pub fn init_db_conn(conn: &Connection) -> Result<()> {
 
     // Verificar columnas existentes
     let mut stmt = conn.prepare("PRAGMA table_info(contenido)")?;
@@ -129,11 +212,8 @@ pub fn init_db() -> Result<()> {
         let _ = conn.execute("ALTER TABLE contenido ADD COLUMN duracion INTEGER", []);
     }
 
-    // Purga controlada para forzar el rellenado de géneros en offline
-    let _ = conn.execute(
-        "DELETE FROM catalogo_offline WHERE contenido_id IN (SELECT id FROM contenido WHERE generos IS NULL OR generos = '')",
-        []
-    );
+    // Nota Etapa 5.9.1B: Se retiró la purga automática de catalogo_offline por falta de géneros.
+    // Una obra sin géneros puede participar de recomendaciones cuando no hay filtros de género activos.
 
     // Asegurar que catalogo_offline se limpie automáticamente
     conn.execute(
@@ -168,6 +248,64 @@ pub fn init_db() -> Result<()> {
         "UPDATE historial_recomendaciones SET accion = 'EMPEZAR_EN_PROGRESO' WHERE accion = 'AJUSTE_PROGRESO'",
         []
     );
+
+    // Etapa 5.9.2D-1: Tablas de persistencia para recuperador local, presupuesto TMDB y reintentos de pósteres
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS poster_retry_state (
+            contenido_id INTEGER PRIMARY KEY REFERENCES contenido(id) ON DELETE CASCADE,
+            url_fallida TEXT NOT NULL,
+            intentos INTEGER NOT NULL DEFAULT 0,
+            estado TEXT NOT NULL,
+            proximo_reintento INTEGER,
+            ultimo_error TEXT,
+            actualizado_en INTEGER NOT NULL
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS tmdb_request_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            requested_at INTEGER NOT NULL,
+            endpoint_kind TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tmdb_request_log_requested_at
+         ON tmdb_request_log(requested_at)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS tmdb_worker_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            tmdb_bloqueado_hasta INTEGER,
+            motivo_bloqueo TEXT,
+            ultimo_error TEXT,
+            errores_consecutivos INTEGER NOT NULL DEFAULT 0,
+            ultima_operacion_at INTEGER
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO tmdb_worker_state (id, errores_consecutivos) VALUES (1, 0)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS tmdb_group_cooldown (
+            grupo TEXT PRIMARY KEY CHECK (
+                grupo IN ('peliculas_no_anime', 'series_no_anime', 'peliculas_anime', 'series_anime')
+            ),
+            bloqueado_hasta INTEGER NOT NULL DEFAULT 0,
+            fallos_sin_aporte INTEGER NOT NULL DEFAULT 0,
+            motivo TEXT
+        )",
+        [],
+    )?;
 
     Ok(())
 }
@@ -276,9 +414,6 @@ pub fn get_recomendacion_de_hoy(state: &DbState, filtros: Option<crate::models::
     {
         let mut last_date = state.ultimo_reset_fecha.lock().unwrap();
         if *last_date != today_str {
-            let threshold_date: String = conn.query_row("SELECT date('now', 'localtime', ?1)", params![format!("-{} days", DIAS_EXCLUSION_SKIP)], |row| row.get(0)).unwrap_or_else(|_| today_str.clone());
-            let _ = conn.execute("DELETE FROM omitidos_sesion WHERE fecha < ?", params![threshold_date]);
-            
             let mut omitted = state.omitted_in_session.lock().unwrap();
             if let Ok((nuevos_omitidos, _)) = get_omitidos_recientes(DIAS_EXCLUSION_SKIP) {
                 *omitted = nuevos_omitidos;
@@ -310,7 +445,7 @@ pub fn get_recomendacion_de_hoy(state: &DbState, filtros: Option<crate::models::
         }
     };
 
-    // 2. Try to find a series "en progreso" (respetando filtros activos)
+    // 2. Try to find a series "en progreso" (respetando filtros activos y exclusiones)
     let mut stmt = conn.prepare(&format!(
         "SELECT c.id, c.tmdb_id, c.mal_id, c.tipo, c.es_anime, c.titulo, 
                 c.titulo_original, c.poster_url, c.sinopsis, c.fecha_estreno, c.creado_en,
@@ -341,8 +476,9 @@ pub fn get_recomendacion_de_hoy(state: &DbState, filtros: Option<crate::models::
             FROM tv_temporadas tt
             GROUP BY tt.contenido_id
          ) tm ON c.id = tm.contenido_id
-         WHERE uc.estado = 'en_progreso' {}",
-         omit_progreso_clause
+         WHERE uc.estado = 'en_progreso' {} {}",
+         omit_progreso_clause,
+         omit_clause
     ))?;
 
     let mut in_progress_contents = Vec::new();
@@ -369,8 +505,7 @@ pub fn get_recomendacion_de_hoy(state: &DbState, filtros: Option<crate::models::
     }
 
     // Helper closure to query available contents
-    let get_available = |conn: &Connection, ignore_omit: bool| -> Result<Vec<Contenido>> {
-        let current_omit_clause = if ignore_omit { "".to_string() } else { omit_clause.clone() };
+    let get_available = |conn: &Connection| -> Result<Vec<Contenido>> {
         let mut stmt = conn.prepare(&format!(
             "SELECT c.id, c.tmdb_id, c.mal_id, c.tipo, c.es_anime, c.titulo, 
                     c.titulo_original, c.poster_url, c.sinopsis, c.fecha_estreno, c.creado_en,
@@ -390,7 +525,7 @@ pub fn get_recomendacion_de_hoy(state: &DbState, filtros: Option<crate::models::
              JOIN contenido c ON co.contenido_id = c.id
              LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
              WHERE uc.estado IS NULL {}",
-             current_omit_clause
+             omit_clause
         ))?;
         
         let mut results = Vec::new();
@@ -433,17 +568,8 @@ pub fn get_recomendacion_de_hoy(state: &DbState, filtros: Option<crate::models::
             let duracion: Option<i64> = row.get::<_, Option<i64>>(22).ok().flatten();
 
             let raw_poster: Option<String> = row.get(7)?;
-            let poster_url = raw_poster.map(|path| {
-                let home_dir = dirs::home_dir()
-                    .or_else(|| std::env::var("USERPROFILE").map(PathBuf::from).ok())
-                    .unwrap_or_else(|| PathBuf::from(""));
-                let full_path = home_dir.join(".queveohoy").join("cache_posters").join(format!("{}.jpg", id));
-                if full_path.exists() {
-                    full_path.to_string_lossy().to_string()
-                } else {
-                    format!("https://image.tmdb.org/t/p/w500{}", path)
-                }
-            });
+            let cache_dir = get_cache_posters_dir();
+            let poster_url = resolve_poster_salida(&cache_dir, id, raw_poster);
 
             results.push(Contenido {
                 id: Some(id),
@@ -475,32 +601,28 @@ pub fn get_recomendacion_de_hoy(state: &DbState, filtros: Option<crate::models::
     };
 
     // 3. Query catalogo_offline with omit and filters
-    let mut available_contents = get_available(&conn, false)?;
+    let available_contents = get_available(&conn)?;
 
-    // Check sanity: If < 15 virgin contents in DB without filter, wake up worker
+    // Comprobar disponibilidad real: si el stock disponible (no omitido y virgen) es < 15, despertar worker
     let raw_virgin_count = {
-        let mut stmt = conn.prepare("SELECT COUNT(*) FROM catalogo_offline co JOIN contenido c ON co.contenido_id = c.id LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id WHERE uc.estado IS NULL")?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT COUNT(*) FROM catalogo_offline co JOIN contenido c ON co.contenido_id = c.id LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id WHERE uc.estado IS NULL {}",
+            omit_clause
+        ))?;
         stmt.query_row([], |r| r.get::<_, usize>(0)).unwrap_or(0)
     };
     if raw_virgin_count < 15 {
-        println!("[DEBUG Hoy] Stock virgen es {} (< 15), despertando worker...", raw_virgin_count);
+        println!("[DEBUG Hoy] Stock disponible no omitido es {} (< 15), despertando worker...", raw_virgin_count);
         crate::discovery::trigger_discovery();
     }
 
-    // Fallback 1: Si no hay contenidos con omitidos de sesión, limpiar omitted_in_session y reintentar MANTENIENDO los filtros
-    if available_contents.is_empty() {
-        println!("[DEBUG Hoy] Fallback 1: Catálogo vacío con omitidos, limpiando omitted_in_session...");
-        state.omitted_in_session.lock().unwrap().clear();
-        available_contents = get_available(&conn, true)?;
-    }
-
-    // Fallback 2: Si los filtros están activos y no hay coincidencias, devolvemos None (estado vacío sin alterar filtros)
+    // Si no hay contenidos disponibles (por filtros restrictivos o catálogo agotado), devolvemos None de manera controlada sin borrar descartes
     if available_contents.is_empty() {
         if has_active_filters {
             println!("[DEBUG Hoy] No hay contenidos que coincidan con los filtros activos. Devolviendo None.");
-            return Ok(None);
+        } else {
+            println!("[DEBUG Hoy] catalogo_offline no tiene obras disponibles vigentes (agotadas o descartadas). Devolviendo None.");
         }
-        println!("[DEBUG Hoy] catalogo_offline está vacío sin filtros. Devolviendo None.");
         return Ok(None);
     }
 
@@ -522,22 +644,8 @@ pub fn get_recomendacion_de_hoy(state: &DbState, filtros: Option<crate::models::
 fn map_recomendacion(row: &rusqlite::Row) -> rusqlite::Result<RecomendacionHoy> {
     let id: i64 = row.get(0)?;
     let raw_poster: Option<String> = row.get(7)?;
-    let poster_url = raw_poster.map(|path| {
-        if path.starts_with("http://") || path.starts_with("https://") {
-            return path;
-        }
-        let home_dir = dirs::home_dir()
-            .or_else(|| std::env::var("USERPROFILE").map(PathBuf::from).ok())
-            .unwrap_or_else(|| PathBuf::from(""));
-        let full_path = home_dir.join(".queveohoy").join("cache_posters").join(format!("{}.jpg", id));
-        if full_path.exists() {
-            full_path.to_string_lossy().to_string()
-        } else if path.starts_with('/') {
-            format!("https://image.tmdb.org/t/p/w500{}", path)
-        } else {
-            format!("https://image.tmdb.org/t/p/w500/{}", path)
-        }
-    });
+    let cache_dir = get_cache_posters_dir();
+    let poster_url = resolve_poster_salida(&cache_dir, id, raw_poster);
 
     let raw_backdrop: Option<String> = row.get::<usize, Option<String>>(20).ok().flatten();
     let backdrop_url = raw_backdrop.map(|bp| {
@@ -1145,6 +1253,9 @@ pub fn get_omitidos_recientes(dias: i64) -> Result<(std::collections::HashSet<i6
     let today_str: String = conn.query_row("SELECT date('now', 'localtime')", [], |row| row.get(0))?;
     let threshold_date: String = conn.query_row("SELECT date('now', 'localtime', ?1)", params![format!("-{} days", dias)], |row| row.get(0))?;
     
+    // Purgar exclusiones vencidas (más antiguas que el período establecido de 10 días)
+    let _ = conn.execute("DELETE FROM omitidos_sesion WHERE fecha < ?1", params![threshold_date]);
+
     let mut stmt = conn.prepare("SELECT DISTINCT contenido_id FROM omitidos_sesion WHERE fecha >= ?1")?;
     let mut rows = stmt.query(params![threshold_date])?;
     
@@ -1167,6 +1278,7 @@ pub fn add_omitido_sesion(contenido_id: i64) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn get_estado_contenido(id: i64) -> Result<String> {
     let conn = get_connection()?;
     let estado: String = conn.query_row(
@@ -1252,6 +1364,43 @@ pub fn get_generos_disponibles_hoy() -> Result<Vec<crate::models::GeneroConteo>>
     result.sort_by(|a, b| b.count.cmp(&a.count));
 
     Ok(result)
+}
+
+pub fn get_stock_util_por_grupo() -> Result<crate::models::StockGrupoInfo> {
+    let conn = get_connection()?;
+    get_stock_util_por_grupo_conn(&conn)
+}
+
+pub fn get_stock_util_por_grupo_conn(conn: &Connection) -> Result<crate::models::StockGrupoInfo> {
+    let threshold_param = format!("-{} days", DIAS_EXCLUSION_SKIP);
+    let mut stmt = conn.prepare(
+        "SELECT
+            COALESCE(SUM(CASE WHEN c.tipo = 'MOVIE' AND c.es_anime = 0 THEN 1 ELSE 0 END), 0) AS peliculas_no_anime,
+            COALESCE(SUM(CASE WHEN c.tipo = 'TV' AND c.es_anime = 0 THEN 1 ELSE 0 END), 0) AS series_no_anime,
+            COALESCE(SUM(CASE WHEN c.tipo = 'MOVIE' AND c.es_anime = 1 THEN 1 ELSE 0 END), 0) AS peliculas_anime,
+            COALESCE(SUM(CASE WHEN c.tipo = 'TV' AND c.es_anime = 1 THEN 1 ELSE 0 END), 0) AS series_anime,
+            COUNT(c.id) AS total_util
+        FROM catalogo_offline co
+        JOIN contenido c ON co.contenido_id = c.id
+        LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
+        WHERE uc.estado IS NULL
+          AND c.id NOT IN (
+              SELECT contenido_id FROM omitidos_sesion 
+              WHERE fecha >= date('now', 'localtime', ?1)
+          )"
+    )?;
+    
+    let info = stmt.query_row(params![threshold_param], |row| {
+        Ok(crate::models::StockGrupoInfo {
+            peliculas_no_anime: row.get(0)?,
+            series_no_anime: row.get(1)?,
+            peliculas_anime: row.get(2)?,
+            series_anime: row.get(3)?,
+            total_util: row.get(4)?,
+        })
+    })?;
+
+    Ok(info)
 }
 
 pub fn prune_catalogo_offline() -> Result<usize> {
@@ -1579,26 +1728,10 @@ pub fn get_catalogo() -> Result<Vec<crate::models::ResultadoBusqueda>> {
          ORDER BY co.fecha_agregado DESC"
     )?;
 
-    let home_dir = dirs::home_dir()
-        .or_else(|| std::env::var("USERPROFILE").map(PathBuf::from).ok())
-        .unwrap_or_else(|| PathBuf::from(""));
-    let cache_dir = home_dir.join(".queveohoy").join("cache_posters");
+    let cache_dir = get_cache_posters_dir();
 
     let resolve_poster = |id: i64, raw_path: Option<String>| -> Option<String> {
-        raw_path.map(|path| {
-            if path.starts_with("http://") || path.starts_with("https://") {
-                path
-            } else {
-                let full_path = cache_dir.join(format!("{}.jpg", id));
-                if full_path.exists() {
-                    full_path.to_string_lossy().to_string()
-                } else if path.starts_with('/') {
-                    format!("https://image.tmdb.org/t/p/w500{}", path)
-                } else {
-                    path
-                }
-            }
-        })
+        resolve_poster_salida(&cache_dir, id, raw_path)
     };
 
     let resolve_backdrop = |raw_path: Option<String>| -> Option<String> {
@@ -1714,4 +1847,1912 @@ pub fn get_catalogo() -> Result<Vec<crate::models::ResultadoBusqueda>> {
     }
 
     Ok(items)
+}
+
+/// Etapa 5.9.2B: Recuperar obras que ya existen en la tabla `contenido`
+/// pero que todavía no están incorporadas en `catalogo_offline`.
+///
+/// Criterios obligatorios:
+/// - Existe en `contenido`.
+/// - No está en `catalogo_offline`.
+/// - No pertenece a `usuario_contenido`.
+/// - Corresponde al grupo solicitado.
+///
+/// Priorización de candidatas:
+/// 1. Con póster, sinopsis y géneros.
+/// 2. Con póster y sinopsis, sin géneros.
+/// 3. Con póster y otros metadatos incompletos.
+/// 4. Con sinopsis, sin póster.
+/// 5. Información muy limitada.
+///
+/// Criterio secundario: `c.creado_en DESC` (ingreso más reciente a la base).
+/// Desempate determinista: `c.id ASC`.
+///
+/// Transaccional e idempotente (INSERT OR IGNORE con BEGIN IMMEDIATE y reintentos en caso de SQLITE_BUSY).
+pub fn recuperar_obras_locales_por_grupo(grupo: crate::models::GrupoContenido, limite: usize) -> Result<usize> {
+    let mut conn = get_connection()?;
+    recuperar_obras_locales_por_grupo_conn(&mut conn, grupo, limite)
+}
+
+pub fn recuperar_obras_locales_por_grupo_conn(
+    conn: &mut Connection,
+    grupo: crate::models::GrupoContenido,
+    limite: usize,
+) -> Result<usize> {
+    if limite == 0 {
+        return Ok(0);
+    }
+
+    let (tipo_db, es_anime_db) = match grupo {
+        crate::models::GrupoContenido::PeliculasNoAnime => ("MOVIE", 0),
+        crate::models::GrupoContenido::SeriesNoAnime => ("TV", 0),
+        crate::models::GrupoContenido::PeliculasAnime => ("MOVIE", 1),
+        crate::models::GrupoContenido::SeriesAnime => ("TV", 1),
+    };
+
+    const MAX_RETRIES: usize = 5;
+    let mut retries = 0;
+
+    loop {
+        let result = (|| -> Result<usize> {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+            // 1. Seleccionar IDs candidatos con la priorización estricta por calidad de metadatos
+            let candidate_ids: Vec<i64> = {
+                let mut stmt = tx.prepare(
+                    "SELECT c.id
+                     FROM contenido c
+                     WHERE c.tipo = ?1 AND c.es_anime = ?2
+                       AND c.id NOT IN (SELECT contenido_id FROM catalogo_offline)
+                       AND c.id NOT IN (SELECT contenido_id FROM usuario_contenido)
+                     ORDER BY
+                         CASE
+                             WHEN (c.poster_url IS NOT NULL AND TRIM(c.poster_url) != '')
+                                  AND (c.sinopsis IS NOT NULL AND TRIM(c.sinopsis) != '')
+                                  AND (c.generos IS NOT NULL AND TRIM(c.generos) != '' AND c.generos != '[]') THEN 1
+                             WHEN (c.poster_url IS NOT NULL AND TRIM(c.poster_url) != '')
+                                  AND (c.sinopsis IS NOT NULL AND TRIM(c.sinopsis) != '') THEN 2
+                             WHEN (c.poster_url IS NOT NULL AND TRIM(c.poster_url) != '') THEN 3
+                             WHEN (c.sinopsis IS NOT NULL AND TRIM(c.sinopsis) != '') THEN 4
+                             ELSE 5
+                         END ASC,
+                         c.creado_en DESC,
+                         c.id ASC
+                     LIMIT ?3"
+                )?;
+
+                let rows = stmt.query_map(params![tipo_db, es_anime_db, limite as i64], |row| row.get(0))?;
+                let mut ids = Vec::new();
+                for r in rows {
+                    ids.push(r?);
+                }
+                ids
+            };
+
+            if candidate_ids.is_empty() {
+                tx.commit()?;
+                return Ok(0);
+            }
+
+            // 2. Insertar cada candidato comprobando ausencia en usuario_contenido
+            let mut insertados = 0;
+            {
+                let mut insert_stmt = tx.prepare(
+                    "INSERT OR IGNORE INTO catalogo_offline (contenido_id, fecha_agregado)
+                     SELECT ?1, datetime('now', 'localtime')
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM usuario_contenido WHERE contenido_id = ?1
+                     )"
+                )?;
+
+                for id in candidate_ids {
+                    let rows_affected = insert_stmt.execute(params![id])?;
+                    if rows_affected > 0 {
+                        insertados += rows_affected;
+                    }
+                }
+            }
+
+            tx.commit()?;
+            Ok(insertados)
+        })();
+
+        match result {
+            Ok(count) => return Ok(count),
+            Err(e) => {
+                if let rusqlite::Error::SqliteFailure(ref f, _) = e {
+                    if f.extended_code == rusqlite::ffi::SQLITE_BUSY
+                        || f.extended_code == rusqlite::ffi::SQLITE_BUSY_SNAPSHOT
+                        || f.code == rusqlite::ErrorCode::DatabaseBusy
+                    {
+                        retries += 1;
+                        if retries < MAX_RETRIES {
+                            std::thread::sleep(std::time::Duration::from_millis(50 * retries as u64));
+                            continue;
+                        }
+                    }
+                }
+                return Err(e);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Etapa 5.9.2D-1: Persistencia, métricas por grupo, presupuesto TMDB,
+// bloqueos/cooldowns y reintentos de pósteres
+// ============================================================================
+
+pub const OBJETIVO_INVENTARIO_POR_GRUPO: i64 = 375;
+pub const TMDB_VENTANA_SEGUNDOS: i64 = 300;
+pub const TMDB_MAX_PETICIONES_VENTANA: i64 = 18;
+pub const TMDB_MARGEN_INICIO_OPERACION: i64 = 16;
+pub const TMDB_INTERVALO_OPERACION_SEGUNDOS: i64 = 60;
+pub const TMDB_LOG_RETENCION_SEGUNDOS: i64 = 900;
+
+pub const POSTER_MAX_INTENTOS: i64 = 5;
+pub const ESTADO_POSTER_PENDIENTE: &str = "pendiente";
+pub const ESTADO_POSTER_AGOTADO: &str = "agotado";
+pub const ESTADO_POSTER_RESUELTO: &str = "resuelto";
+
+pub fn current_unix_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn with_busy_retry<T, F>(mut op: F) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+{
+    const MAX_RETRIES: usize = 5;
+    let mut retries = 0;
+
+    loop {
+        match op() {
+            Ok(val) => return Ok(val),
+            Err(e) => {
+                if let rusqlite::Error::SqliteFailure(ref f, _) = e {
+                    if f.extended_code == rusqlite::ffi::SQLITE_BUSY
+                        || f.extended_code == rusqlite::ffi::SQLITE_BUSY_SNAPSHOT
+                        || f.code == rusqlite::ErrorCode::DatabaseBusy
+                    {
+                        retries += 1;
+                        if retries < MAX_RETRIES {
+                            std::thread::sleep(std::time::Duration::from_millis(50 * retries as u64));
+                            continue;
+                        }
+                    }
+                }
+                return Err(e);
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Métricas por grupo (Inventario y Candidatas locales)
+// ----------------------------------------------------------------------------
+
+pub fn get_inventario_por_grupo() -> Result<crate::models::ConteoPorGrupo> {
+    let conn = get_connection()?;
+    get_inventario_por_grupo_conn(&conn)
+}
+
+pub fn get_inventario_por_grupo_conn(conn: &Connection) -> Result<crate::models::ConteoPorGrupo> {
+    let mut stmt = conn.prepare(
+        "SELECT
+            COALESCE(SUM(CASE WHEN c.tipo = 'MOVIE' AND c.es_anime = 0 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN c.tipo = 'TV' AND c.es_anime = 0 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN c.tipo = 'MOVIE' AND c.es_anime = 1 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN c.tipo = 'TV' AND c.es_anime = 1 THEN 1 ELSE 0 END), 0),
+            COUNT(c.id)
+         FROM catalogo_offline co
+         JOIN contenido c ON co.contenido_id = c.id
+         LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
+         WHERE uc.contenido_id IS NULL",
+    )?;
+
+    stmt.query_row([], |row| {
+        Ok(crate::models::ConteoPorGrupo {
+            peliculas_no_anime: row.get(0)?,
+            series_no_anime: row.get(1)?,
+            peliculas_anime: row.get(2)?,
+            series_anime: row.get(3)?,
+            total: row.get(4)?,
+        })
+    })
+}
+
+pub fn get_inventario_grupo(grupo: crate::models::GrupoContenido) -> Result<i64> {
+    let conn = get_connection()?;
+    get_inventario_grupo_conn(&conn, grupo)
+}
+
+pub fn get_inventario_grupo_conn(
+    conn: &Connection,
+    grupo: crate::models::GrupoContenido,
+) -> Result<i64> {
+    let (tipo_db, es_anime_db) = grupo.db_filter();
+    conn.query_row(
+        "SELECT COUNT(c.id)
+         FROM catalogo_offline co
+         JOIN contenido c ON co.contenido_id = c.id
+         LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
+         WHERE c.tipo = ?1
+           AND c.es_anime = ?2
+           AND uc.contenido_id IS NULL",
+        params![tipo_db, es_anime_db],
+        |row| row.get(0),
+    )
+}
+
+pub fn get_candidatas_locales_por_grupo() -> Result<crate::models::ConteoPorGrupo> {
+    let conn = get_connection()?;
+    get_candidatas_locales_por_grupo_conn(&conn)
+}
+
+pub fn get_candidatas_locales_por_grupo_conn(
+    conn: &Connection,
+) -> Result<crate::models::ConteoPorGrupo> {
+    let mut stmt = conn.prepare(
+        "SELECT
+            COALESCE(SUM(CASE WHEN c.tipo = 'MOVIE' AND c.es_anime = 0 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN c.tipo = 'TV' AND c.es_anime = 0 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN c.tipo = 'MOVIE' AND c.es_anime = 1 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN c.tipo = 'TV' AND c.es_anime = 1 THEN 1 ELSE 0 END), 0),
+            COUNT(c.id)
+         FROM contenido c
+         LEFT JOIN catalogo_offline co ON c.id = co.contenido_id
+         LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
+         WHERE co.contenido_id IS NULL
+           AND uc.contenido_id IS NULL",
+    )?;
+
+    stmt.query_row([], |row| {
+        Ok(crate::models::ConteoPorGrupo {
+            peliculas_no_anime: row.get(0)?,
+            series_no_anime: row.get(1)?,
+            peliculas_anime: row.get(2)?,
+            series_anime: row.get(3)?,
+            total: row.get(4)?,
+        })
+    })
+}
+
+pub fn get_candidatas_locales_grupo(grupo: crate::models::GrupoContenido) -> Result<i64> {
+    let conn = get_connection()?;
+    get_candidatas_locales_grupo_conn(&conn, grupo)
+}
+
+pub fn get_candidatas_locales_grupo_conn(
+    conn: &Connection,
+    grupo: crate::models::GrupoContenido,
+) -> Result<i64> {
+    let (tipo_db, es_anime_db) = grupo.db_filter();
+    conn.query_row(
+        "SELECT COUNT(c.id)
+         FROM contenido c
+         LEFT JOIN catalogo_offline co ON c.id = co.contenido_id
+         LEFT JOIN usuario_contenido uc ON c.id = uc.contenido_id
+         WHERE c.tipo = ?1
+           AND c.es_anime = ?2
+           AND co.contenido_id IS NULL
+           AND uc.contenido_id IS NULL",
+        params![tipo_db, es_anime_db],
+        |row| row.get(0),
+    )
+}
+
+// ----------------------------------------------------------------------------
+// Reserva atómica del presupuesto TMDB
+// ----------------------------------------------------------------------------
+
+pub fn limpiar_tmdb_request_log_conn(conn: &Connection, now: i64) -> Result<usize> {
+    let cutoff = now - TMDB_LOG_RETENCION_SEGUNDOS;
+    conn.execute(
+        "DELETE FROM tmdb_request_log WHERE requested_at < ?1",
+        params![cutoff],
+    )
+}
+
+pub fn reservar_peticion_tmdb(
+    endpoint_kind: &str,
+    es_inicio_operacion: bool,
+) -> Result<crate::models::ReservaTmdbResultado> {
+    let mut conn = get_connection()?;
+    reservar_peticion_tmdb_conn(&mut conn, endpoint_kind, es_inicio_operacion)
+}
+
+pub fn reservar_peticion_tmdb_conn(
+    conn: &mut Connection,
+    endpoint_kind: &str,
+    es_inicio_operacion: bool,
+) -> Result<crate::models::ReservaTmdbResultado> {
+    reservar_peticion_tmdb_at(conn, endpoint_kind, es_inicio_operacion, current_unix_timestamp())
+}
+
+pub fn reservar_peticion_tmdb_at(
+    conn: &mut Connection,
+    endpoint_kind: &str,
+    es_inicio_operacion: bool,
+    now: i64,
+) -> Result<crate::models::ReservaTmdbResultado> {
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        tx.execute(
+            "INSERT OR IGNORE INTO tmdb_worker_state (id, errores_consecutivos) VALUES (1, 0)",
+            [],
+        )?;
+
+        let retention_cutoff = now - TMDB_LOG_RETENCION_SEGUNDOS;
+        tx.execute(
+            "DELETE FROM tmdb_request_log WHERE requested_at < ?1",
+            params![retention_cutoff],
+        )?;
+
+        let (bloqueado_hasta, motivo_bloqueo, ultima_operacion_at): (
+            Option<i64>,
+            Option<String>,
+            Option<i64>,
+        ) = tx.query_row(
+            "SELECT tmdb_bloqueado_hasta, motivo_bloqueo, ultima_operacion_at
+             FROM tmdb_worker_state
+             WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        if let Some(hasta) = bloqueado_hasta {
+            if hasta > now {
+                tx.commit()?;
+                return Ok(crate::models::ReservaTmdbResultado::BloqueoActivo {
+                    bloqueado_hasta: hasta,
+                    motivo: motivo_bloqueo,
+                });
+            }
+        }
+
+        if es_inicio_operacion {
+            if let Some(ultimo) = ultima_operacion_at {
+                let proximo = ultimo + TMDB_INTERVALO_OPERACION_SEGUNDOS;
+                if now < proximo {
+                    tx.commit()?;
+                    return Ok(
+                        crate::models::ReservaTmdbResultado::IntervaloOperacionNoCumplido {
+                            ultimo_inicio_at: ultimo,
+                            proximo_disponible_at: proximo,
+                        },
+                    );
+                }
+            }
+        }
+
+        let window_start = now - TMDB_VENTANA_SEGUNDOS;
+        let count_en_ventana: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM tmdb_request_log WHERE requested_at > ?1",
+            params![window_start],
+            |row| row.get(0),
+        )?;
+
+        if es_inicio_operacion {
+            if count_en_ventana > TMDB_MARGEN_INICIO_OPERACION {
+                tx.commit()?;
+                return Ok(crate::models::ReservaTmdbResultado::PresupuestoAgotado {
+                    peticiones_en_ventana: count_en_ventana,
+                    limite_aplicado: TMDB_MARGEN_INICIO_OPERACION,
+                });
+            }
+        } else if count_en_ventana >= TMDB_MAX_PETICIONES_VENTANA {
+            tx.commit()?;
+            return Ok(crate::models::ReservaTmdbResultado::PresupuestoAgotado {
+                peticiones_en_ventana: count_en_ventana,
+                limite_aplicado: TMDB_MAX_PETICIONES_VENTANA,
+            });
+        }
+
+        tx.execute(
+            "INSERT INTO tmdb_request_log (requested_at, endpoint_kind) VALUES (?1, ?2)",
+            params![now, endpoint_kind],
+        )?;
+        let reserva_id = tx.last_insert_rowid();
+
+        if es_inicio_operacion {
+            tx.execute(
+                "UPDATE tmdb_worker_state SET ultima_operacion_at = ?1 WHERE id = 1",
+                params![now],
+            )?;
+        }
+
+        tx.commit()?;
+
+        let nuevas_en_ventana = count_en_ventana + 1;
+        Ok(crate::models::ReservaTmdbResultado::Reservada {
+            reserva_id,
+            peticiones_en_ventana: nuevas_en_ventana,
+            restante_en_ventana: TMDB_MAX_PETICIONES_VENTANA - nuevas_en_ventana,
+        })
+    })
+}
+
+// ----------------------------------------------------------------------------
+// Persistencia de bloqueos globales, errores y cooldowns por grupo
+// ----------------------------------------------------------------------------
+
+pub fn get_tmdb_worker_state() -> Result<crate::models::TmdbWorkerState> {
+    let conn = get_connection()?;
+    get_tmdb_worker_state_conn(&conn)
+}
+
+pub fn get_tmdb_worker_state_conn(conn: &Connection) -> Result<crate::models::TmdbWorkerState> {
+    conn.execute(
+        "INSERT OR IGNORE INTO tmdb_worker_state (id, errores_consecutivos) VALUES (1, 0)",
+        [],
+    )?;
+
+    conn.query_row(
+        "SELECT tmdb_bloqueado_hasta, motivo_bloqueo, ultimo_error, errores_consecutivos, ultima_operacion_at
+         FROM tmdb_worker_state
+         WHERE id = 1",
+        [],
+        |row| {
+            Ok(crate::models::TmdbWorkerState {
+                tmdb_bloqueado_hasta: row.get(0)?,
+                motivo_bloqueo: row.get(1)?,
+                ultimo_error: row.get(2)?,
+                errores_consecutivos: row.get(3)?,
+                ultima_operacion_at: row.get(4)?,
+            })
+        },
+    )
+}
+
+pub fn registrar_bloqueo_tmdb(bloqueado_hasta: i64, motivo: &str) -> Result<()> {
+    let mut conn = get_connection()?;
+    registrar_bloqueo_tmdb_conn(&mut conn, bloqueado_hasta, motivo)
+}
+
+pub fn registrar_bloqueo_tmdb_conn(
+    conn: &mut Connection,
+    bloqueado_hasta: i64,
+    motivo: &str,
+) -> Result<()> {
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO tmdb_worker_state (id, errores_consecutivos) VALUES (1, 0)",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE tmdb_worker_state
+             SET tmdb_bloqueado_hasta = ?1,
+                 motivo_bloqueo = ?2
+             WHERE id = 1",
+            params![bloqueado_hasta, motivo],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+pub fn registrar_error_tmdb(error: &str) -> Result<i64> {
+    let mut conn = get_connection()?;
+    registrar_error_tmdb_conn(&mut conn, error)
+}
+
+pub fn registrar_error_tmdb_conn(conn: &mut Connection, error: &str) -> Result<i64> {
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO tmdb_worker_state (id, errores_consecutivos) VALUES (1, 0)",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE tmdb_worker_state
+             SET ultimo_error = ?1,
+                 errores_consecutivos = errores_consecutivos + 1
+             WHERE id = 1",
+            params![error],
+        )?;
+        let consecutivos: i64 = tx.query_row(
+            "SELECT errores_consecutivos FROM tmdb_worker_state WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        tx.commit()?;
+        Ok(consecutivos)
+    })
+}
+
+pub fn limpiar_bloqueo_tmdb() -> Result<()> {
+    let mut conn = get_connection()?;
+    limpiar_bloqueo_tmdb_conn(&mut conn)
+}
+
+pub fn limpiar_bloqueo_tmdb_conn(conn: &mut Connection) -> Result<()> {
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE tmdb_worker_state
+             SET tmdb_bloqueado_hasta = NULL,
+                 motivo_bloqueo = NULL
+             WHERE id = 1",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+pub fn restablecer_errores_tmdb() -> Result<()> {
+    let mut conn = get_connection()?;
+    restablecer_errores_tmdb_conn(&mut conn)
+}
+
+pub fn restablecer_errores_tmdb_conn(conn: &mut Connection) -> Result<()> {
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE tmdb_worker_state
+             SET ultimo_error = NULL,
+                 errores_consecutivos = 0
+             WHERE id = 1",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+pub fn restablecer_estado_tmdb() -> Result<()> {
+    let mut conn = get_connection()?;
+    restablecer_estado_tmdb_conn(&mut conn)
+}
+
+pub fn restablecer_estado_tmdb_conn(conn: &mut Connection) -> Result<()> {
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO tmdb_worker_state (id, errores_consecutivos) VALUES (1, 0)",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE tmdb_worker_state
+             SET tmdb_bloqueado_hasta = NULL,
+                 motivo_bloqueo = NULL,
+                 ultimo_error = NULL,
+                 errores_consecutivos = 0
+             WHERE id = 1",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+pub fn registrar_cooldown_grupo(
+    grupo: crate::models::GrupoContenido,
+    bloqueado_hasta: i64,
+    fallos_sin_aporte: i64,
+    motivo: Option<&str>,
+) -> Result<()> {
+    let mut conn = get_connection()?;
+    registrar_cooldown_grupo_conn(&mut conn, grupo, bloqueado_hasta, fallos_sin_aporte, motivo)
+}
+
+pub fn registrar_cooldown_grupo_conn(
+    conn: &mut Connection,
+    grupo: crate::models::GrupoContenido,
+    bloqueado_hasta: i64,
+    fallos_sin_aporte: i64,
+    motivo: Option<&str>,
+) -> Result<()> {
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO tmdb_group_cooldown (grupo, bloqueado_hasta, fallos_sin_aporte, motivo)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(grupo) DO UPDATE SET
+                 bloqueado_hasta = excluded.bloqueado_hasta,
+                 fallos_sin_aporte = excluded.fallos_sin_aporte,
+                 motivo = excluded.motivo",
+            params![grupo.as_str(), bloqueado_hasta, fallos_sin_aporte, motivo],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+pub fn get_cooldown_grupo(
+    grupo: crate::models::GrupoContenido,
+) -> Result<Option<crate::models::TmdbGroupCooldown>> {
+    let conn = get_connection()?;
+    get_cooldown_grupo_conn(&conn, grupo)
+}
+
+pub fn get_cooldown_grupo_conn(
+    conn: &Connection,
+    grupo: crate::models::GrupoContenido,
+) -> Result<Option<crate::models::TmdbGroupCooldown>> {
+    let mut stmt = conn.prepare(
+        "SELECT grupo, bloqueado_hasta, fallos_sin_aporte, motivo
+         FROM tmdb_group_cooldown
+         WHERE grupo = ?1",
+    )?;
+    let mut rows = stmt.query(params![grupo.as_str()])?;
+    if let Some(row) = rows.next()? {
+        let grupo_str: String = row.get(0)?;
+        let parsed = crate::models::GrupoContenido::from_db_str(&grupo_str).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(
+                0,
+                "grupo".to_string(),
+                rusqlite::types::Type::Text,
+            )
+        })?;
+        Ok(Some(crate::models::TmdbGroupCooldown {
+            grupo: parsed,
+            bloqueado_hasta: row.get(1)?,
+            fallos_sin_aporte: row.get(2)?,
+            motivo: row.get(3)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn get_todos_cooldowns_grupo() -> Result<Vec<crate::models::TmdbGroupCooldown>> {
+    let conn = get_connection()?;
+    get_todos_cooldowns_grupo_conn(&conn)
+}
+
+pub fn get_todos_cooldowns_grupo_conn(
+    conn: &Connection,
+) -> Result<Vec<crate::models::TmdbGroupCooldown>> {
+    let mut stmt = conn.prepare(
+        "SELECT grupo, bloqueado_hasta, fallos_sin_aporte, motivo
+         FROM tmdb_group_cooldown
+         ORDER BY grupo ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let grupo_str: String = row.get(0)?;
+        let parsed = crate::models::GrupoContenido::from_db_str(&grupo_str).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(
+                0,
+                "grupo".to_string(),
+                rusqlite::types::Type::Text,
+            )
+        })?;
+        Ok(crate::models::TmdbGroupCooldown {
+            grupo: parsed,
+            bloqueado_hasta: row.get(1)?,
+            fallos_sin_aporte: row.get(2)?,
+            motivo: row.get(3)?,
+        })
+    })?;
+
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+pub fn restablecer_cooldown_grupo(grupo: crate::models::GrupoContenido) -> Result<()> {
+    let mut conn = get_connection()?;
+    restablecer_cooldown_grupo_conn(&mut conn, grupo)
+}
+
+pub fn restablecer_cooldown_grupo_conn(
+    conn: &mut Connection,
+    grupo: crate::models::GrupoContenido,
+) -> Result<()> {
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM tmdb_group_cooldown WHERE grupo = ?1",
+            params![grupo.as_str()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+// ----------------------------------------------------------------------------
+// Persistencia de reintentos de pósteres (poster_retry_state)
+// ----------------------------------------------------------------------------
+
+fn calcular_backoff_poster_segundos(intentos: i64) -> i64 {
+    match intentos {
+        1 => 300,
+        2 => 900,
+        3 => 3600,
+        4 => 21600,
+        _ => 86400,
+    }
+}
+
+pub fn get_poster_retry_state(contenido_id: i64) -> Result<Option<crate::models::PosterRetryState>> {
+    let conn = get_connection()?;
+    get_poster_retry_state_conn(&conn, contenido_id)
+}
+
+pub fn get_poster_retry_state_conn(
+    conn: &Connection,
+    contenido_id: i64,
+) -> Result<Option<crate::models::PosterRetryState>> {
+    let mut stmt = conn.prepare(
+        "SELECT contenido_id, url_fallida, intentos, estado, proximo_reintento, ultimo_error, actualizado_en
+         FROM poster_retry_state
+         WHERE contenido_id = ?1",
+    )?;
+    let mut rows = stmt.query(params![contenido_id])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(crate::models::PosterRetryState {
+            contenido_id: row.get(0)?,
+            url_fallida: row.get(1)?,
+            intentos: row.get(2)?,
+            estado: row.get(3)?,
+            proximo_reintento: row.get(4)?,
+            ultimo_error: row.get(5)?,
+            actualizado_en: row.get(6)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn registrar_fallo_poster(
+    contenido_id: i64,
+    url_fallida: &str,
+    error: &str,
+) -> Result<crate::models::PosterRetryState> {
+    let mut conn = get_connection()?;
+    registrar_fallo_poster_conn(&mut conn, contenido_id, url_fallida, error)
+}
+
+pub fn registrar_fallo_poster_conn(
+    conn: &mut Connection,
+    contenido_id: i64,
+    url_fallida: &str,
+    error: &str,
+) -> Result<crate::models::PosterRetryState> {
+    registrar_fallo_poster_at(
+        conn,
+        contenido_id,
+        url_fallida,
+        error,
+        current_unix_timestamp(),
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResultadoDescargaPoster {
+    Exito {
+        contenido_id: i64,
+    },
+    Fallo {
+        contenido_id: i64,
+        url: String,
+        error: String,
+    },
+}
+
+fn aplicar_fallo_poster_tx(
+    tx: &rusqlite::Transaction<'_>,
+    contenido_id: i64,
+    url_fallida: &str,
+    error: &str,
+    now: i64,
+) -> Result<crate::models::PosterRetryState> {
+    let existente: Option<(String, i64, String)> = {
+        let mut stmt = tx.prepare(
+            "SELECT url_fallida, intentos, estado
+             FROM poster_retry_state
+             WHERE contenido_id = ?1",
+        )?;
+        let mut rows = stmt.query(params![contenido_id])?;
+        if let Some(row) = rows.next()? {
+            Some((row.get(0)?, row.get(1)?, row.get(2)?))
+        } else {
+            None
+        }
+    };
+
+    let nuevos_intentos = match existente {
+        Some((prev_url, prev_intentos, prev_estado))
+            if prev_url == url_fallida && prev_estado != ESTADO_POSTER_RESUELTO =>
+        {
+            prev_intentos + 1
+        }
+        _ => 1,
+    };
+
+    let (estado, proximo_reintento) = if nuevos_intentos >= POSTER_MAX_INTENTOS {
+        (ESTADO_POSTER_AGOTADO.to_string(), None)
+    } else {
+        let backoff = calcular_backoff_poster_segundos(nuevos_intentos);
+        (ESTADO_POSTER_PENDIENTE.to_string(), Some(now + backoff))
+    };
+
+    tx.execute(
+        "INSERT INTO poster_retry_state (
+            contenido_id, url_fallida, intentos, estado, proximo_reintento, ultimo_error, actualizado_en
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(contenido_id) DO UPDATE SET
+            url_fallida = excluded.url_fallida,
+            intentos = excluded.intentos,
+            estado = excluded.estado,
+            proximo_reintento = excluded.proximo_reintento,
+            ultimo_error = excluded.ultimo_error,
+            actualizado_en = excluded.actualizado_en",
+        params![
+            contenido_id,
+            url_fallida,
+            nuevos_intentos,
+            estado,
+            proximo_reintento,
+            error,
+            now
+        ],
+    )?;
+
+    Ok(crate::models::PosterRetryState {
+        contenido_id,
+        url_fallida: url_fallida.to_string(),
+        intentos: nuevos_intentos,
+        estado,
+        proximo_reintento,
+        ultimo_error: Some(error.to_string()),
+        actualizado_en: now,
+    })
+}
+
+fn aplicar_exito_poster_tx(
+    tx: &rusqlite::Transaction<'_>,
+    contenido_id: i64,
+    now: i64,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO poster_retry_state (
+            contenido_id, url_fallida, intentos, estado, proximo_reintento, ultimo_error, actualizado_en
+         ) VALUES (
+            ?1,
+            COALESCE((SELECT TRIM(poster_url) FROM contenido WHERE id = ?1), ''),
+            0,
+            ?2,
+            NULL,
+            NULL,
+            ?3
+         )
+         ON CONFLICT(contenido_id) DO UPDATE SET
+            intentos = 0,
+            estado = excluded.estado,
+            proximo_reintento = NULL,
+            ultimo_error = NULL,
+            actualizado_en = excluded.actualizado_en",
+        params![contenido_id, ESTADO_POSTER_RESUELTO, now],
+    )?;
+    Ok(())
+}
+
+pub fn registrar_fallo_poster_at(
+    conn: &mut Connection,
+    contenido_id: i64,
+    url_fallida: &str,
+    error: &str,
+    now: i64,
+) -> Result<crate::models::PosterRetryState> {
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let state = aplicar_fallo_poster_tx(&tx, contenido_id, url_fallida, error, now)?;
+        tx.commit()?;
+        Ok(state)
+    })
+}
+
+pub fn registrar_exito_poster(contenido_id: i64) -> Result<()> {
+    let mut conn = get_connection()?;
+    registrar_exito_poster_conn(&mut conn, contenido_id)
+}
+
+pub fn registrar_exito_poster_conn(conn: &mut Connection, contenido_id: i64) -> Result<()> {
+    registrar_exito_poster_at(conn, contenido_id, current_unix_timestamp())
+}
+
+pub fn registrar_exito_poster_at(
+    conn: &mut Connection,
+    contenido_id: i64,
+    now: i64,
+) -> Result<()> {
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        aplicar_exito_poster_tx(&tx, contenido_id, now)?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+pub fn persistir_resultados_posters(resultados: &[ResultadoDescargaPoster]) -> Result<()> {
+    if resultados.is_empty() {
+        return Ok(());
+    }
+    let mut conn = get_connection()?;
+    persistir_resultados_posters_conn(&mut conn, resultados)
+}
+
+pub fn persistir_resultados_posters_conn(
+    conn: &mut Connection,
+    resultados: &[ResultadoDescargaPoster],
+) -> Result<()> {
+    persistir_resultados_posters_at(conn, resultados, current_unix_timestamp())
+}
+
+pub fn persistir_resultados_posters_at(
+    conn: &mut Connection,
+    resultados: &[ResultadoDescargaPoster],
+    now: i64,
+) -> Result<()> {
+    if resultados.is_empty() {
+        return Ok(());
+    }
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        for resultado in resultados {
+            match resultado {
+                ResultadoDescargaPoster::Exito { contenido_id } => {
+                    aplicar_exito_poster_tx(&tx, *contenido_id, now)?;
+                }
+                ResultadoDescargaPoster::Fallo {
+                    contenido_id,
+                    url,
+                    error,
+                } => {
+                    aplicar_fallo_poster_tx(&tx, *contenido_id, url, error, now)?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+pub fn get_posters_pendientes_mantenimiento(
+    limite: usize,
+) -> Result<Vec<crate::models::PosterRetryState>> {
+    let conn = get_connection()?;
+    get_posters_pendientes_mantenimiento_conn(&conn, limite)
+}
+
+pub fn get_posters_pendientes_mantenimiento_conn(
+    conn: &Connection,
+    limite: usize,
+) -> Result<Vec<crate::models::PosterRetryState>> {
+    get_posters_pendientes_mantenimiento_at(conn, current_unix_timestamp(), limite)
+}
+
+pub fn get_posters_pendientes_mantenimiento_at(
+    conn: &Connection,
+    now: i64,
+    limite: usize,
+) -> Result<Vec<crate::models::PosterRetryState>> {
+    if limite == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT c.id,
+                COALESCE(NULLIF(TRIM(prs.url_fallida), ''), TRIM(c.poster_url)) AS effective_url,
+                COALESCE(prs.intentos, 0) AS intentos,
+                COALESCE(prs.estado, ?1) AS estado,
+                prs.proximo_reintento,
+                prs.ultimo_error,
+                COALESCE(prs.actualizado_en, 0) AS actualizado_en
+         FROM catalogo_offline co
+         INNER JOIN contenido c ON c.id = co.contenido_id
+         LEFT JOIN usuario_contenido uc ON uc.contenido_id = c.id
+         LEFT JOIN poster_retry_state prs ON prs.contenido_id = c.id
+         WHERE uc.contenido_id IS NULL
+           AND (
+               prs.contenido_id IS NULL
+               OR (prs.estado = ?1 AND (prs.proximo_reintento IS NULL OR prs.proximo_reintento <= ?2))
+           )
+           AND (
+               COALESCE(NULLIF(TRIM(prs.url_fallida), ''), TRIM(c.poster_url)) LIKE 'http://%'
+               OR COALESCE(NULLIF(TRIM(prs.url_fallida), ''), TRIM(c.poster_url)) LIKE 'https://%'
+               OR COALESCE(NULLIF(TRIM(prs.url_fallida), ''), TRIM(c.poster_url)) LIKE '/%'
+           )
+         ORDER BY COALESCE(prs.proximo_reintento, 0) ASC, COALESCE(prs.actualizado_en, 0) ASC, c.id ASC
+         LIMIT ?3",
+    )?;
+
+    let rows = stmt.query_map(
+        params![ESTADO_POSTER_PENDIENTE, now, limite as i64],
+        |row| {
+            Ok(crate::models::PosterRetryState {
+                contenido_id: row.get(0)?,
+                url_fallida: row.get(1)?,
+                intentos: row.get(2)?,
+                estado: row.get(3)?,
+                proximo_reintento: row.get(4)?,
+                ultimo_error: row.get(5)?,
+                actualizado_en: row.get(6)?,
+            })
+        },
+    )?;
+
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+pub fn reiniciar_poster_retry_si_cambia_url(
+    contenido_id: i64,
+    nueva_url: &str,
+) -> Result<bool> {
+    let mut conn = get_connection()?;
+    reiniciar_poster_retry_si_cambia_url_conn(&mut conn, contenido_id, nueva_url)
+}
+
+pub fn reiniciar_poster_retry_si_cambia_url_conn(
+    conn: &mut Connection,
+    contenido_id: i64,
+    nueva_url: &str,
+) -> Result<bool> {
+    with_busy_retry(|| {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let rows_deleted = tx.execute(
+            "DELETE FROM poster_retry_state
+             WHERE contenido_id = ?1 AND url_fallida != ?2",
+            params![contenido_id, nueva_url],
+        )?;
+        tx.commit()?;
+        Ok(rows_deleted > 0)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{GrupoContenido, ReservaTmdbResultado};
+
+    fn setup_test_db() -> Connection {
+        let conn = Connection::open_in_memory().expect("abrir SQLite en memoria");
+        conn.pragma_update(None, "foreign_keys", "ON")
+            .expect("activar foreign_keys");
+
+        conn.execute_batch(
+            "CREATE TABLE contenido (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tmdb_id INTEGER,
+                mal_id INTEGER,
+                tipo TEXT NOT NULL,
+                es_anime INTEGER NOT NULL DEFAULT 0,
+                titulo TEXT NOT NULL,
+                titulo_original TEXT,
+                poster_url TEXT,
+                sinopsis TEXT,
+                fecha_estreno TEXT,
+                creado_en TEXT DEFAULT (datetime('now')),
+                fetch_recently_failed INTEGER DEFAULT 0
+            );
+            CREATE TABLE catalogo_offline (
+                contenido_id INTEGER PRIMARY KEY REFERENCES contenido(id),
+                fecha_agregado TEXT
+            );
+            CREATE TABLE usuario_contenido (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contenido_id INTEGER NOT NULL UNIQUE REFERENCES contenido(id),
+                estado TEXT NOT NULL,
+                fecha_agregado TEXT,
+                fecha_inicio TEXT,
+                fecha_finalizacion TEXT
+            );
+            CREATE TABLE historial_recomendaciones (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contenido_id INTEGER NOT NULL,
+                accion TEXT NOT NULL,
+                fecha TEXT
+            );",
+        )
+        .expect("crear esquema base de prueba");
+
+        init_db_conn(&conn).expect("ejecutar init_db_conn");
+        conn
+    }
+
+    fn insert_contenido(
+        conn: &Connection,
+        tipo: &str,
+        es_anime: i64,
+        titulo: &str,
+        poster_url: Option<&str>,
+        sinopsis: Option<&str>,
+        generos: Option<&str>,
+    ) -> i64 {
+        conn.execute(
+            "INSERT INTO contenido (tipo, es_anime, titulo, poster_url, sinopsis, generos)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![tipo, es_anime, titulo, poster_url, sinopsis, generos],
+        )
+        .expect("insertar contenido");
+        conn.last_insert_rowid()
+    }
+
+    fn add_to_catalogo(conn: &Connection, contenido_id: i64) {
+        conn.execute(
+            "INSERT INTO catalogo_offline (contenido_id, fecha_agregado) VALUES (?1, datetime('now'))",
+            params![contenido_id],
+        )
+        .expect("insertar en catalogo_offline");
+    }
+
+    fn add_to_usuario(conn: &Connection, contenido_id: i64, estado: &str) {
+        conn.execute(
+            "INSERT INTO usuario_contenido (contenido_id, estado, fecha_agregado) VALUES (?1, ?2, datetime('now'))",
+            params![contenido_id, estado],
+        )
+        .expect("insertar en usuario_contenido");
+    }
+
+    #[test]
+    fn test_01_creacion_idempotente_cuatro_tablas() {
+        let conn = setup_test_db();
+        init_db_conn(&conn).expect("segunda ejecucion de init_db_conn debe ser idempotente");
+
+        for tabla in [
+            "poster_retry_state",
+            "tmdb_request_log",
+            "tmdb_worker_state",
+            "tmdb_group_cooldown",
+        ] {
+            let existe: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    params![tabla],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(existe, 1, "Debe existir la tabla {}", tabla);
+        }
+
+        let idx_existe: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_tmdb_request_log_requested_at'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx_existe, 1);
+    }
+
+    #[test]
+    fn test_02_inicializacion_fila_unica_tmdb_worker_state() {
+        let conn = setup_test_db();
+        init_db_conn(&conn).expect("re-ejecucion idempotente");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tmdb_worker_state", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let state = get_tmdb_worker_state_conn(&conn).unwrap();
+        assert_eq!(state.errores_consecutivos, 0);
+        assert_eq!(state.tmdb_bloqueado_hasta, None);
+        assert_eq!(state.ultima_operacion_at, None);
+
+        let err_insert = conn.execute(
+            "INSERT INTO tmdb_worker_state (id, errores_consecutivos) VALUES (2, 0)",
+            [],
+        );
+        assert!(err_insert.is_err(), "CHECK (id = 1) debe impedir filas con id != 1");
+    }
+
+    #[test]
+    fn test_03_conteo_inventario_cuatro_grupos() {
+        let conn = setup_test_db();
+
+        let p_no_anime = insert_contenido(&conn, "MOVIE", 0, "Peli 1", None, None, None);
+        let s_no_anime_1 = insert_contenido(&conn, "TV", 0, "Serie 1", None, None, None);
+        let s_no_anime_2 = insert_contenido(&conn, "TV", 0, "Serie 2", None, None, None);
+        let p_anime = insert_contenido(&conn, "MOVIE", 1, "Peli Anime 1", None, None, None);
+        let s_anime = insert_contenido(&conn, "TV", 1, "Serie Anime 1", None, None, None);
+
+        for id in [p_no_anime, s_no_anime_1, s_no_anime_2, p_anime, s_anime] {
+            add_to_catalogo(&conn, id);
+        }
+
+        let inv = get_inventario_por_grupo_conn(&conn).unwrap();
+        assert_eq!(inv.peliculas_no_anime, 1);
+        assert_eq!(inv.series_no_anime, 2);
+        assert_eq!(inv.peliculas_anime, 1);
+        assert_eq!(inv.series_anime, 1);
+        assert_eq!(inv.total, 5);
+    }
+
+    #[test]
+    fn test_04_exclusion_biblioteca_del_inventario() {
+        let conn = setup_test_db();
+
+        let id_en_catalogo = insert_contenido(&conn, "MOVIE", 0, "Disponible", None, None, None);
+        let id_en_biblioteca = insert_contenido(&conn, "MOVIE", 0, "En Biblioteca", None, None, None);
+
+        add_to_catalogo(&conn, id_en_catalogo);
+        add_to_catalogo(&conn, id_en_biblioteca);
+        // Al insertar en usuario_contenido el trigger limpia catalogo_offline, pero incluso si existiera en ambas, la query excluye usuario_contenido.
+        add_to_usuario(&conn, id_en_biblioteca, "PENDIENTE");
+
+        let inv = get_inventario_grupo_conn(&conn, GrupoContenido::PeliculasNoAnime).unwrap();
+        assert_eq!(inv, 1);
+    }
+
+    #[test]
+    fn test_05_descartes_temporales_no_reducen_inventario() {
+        let conn = setup_test_db();
+
+        let id = insert_contenido(&conn, "TV", 1, "Anime Omitido", None, None, None);
+        add_to_catalogo(&conn, id);
+        conn.execute(
+            "INSERT INTO omitidos_sesion (contenido_id, fecha) VALUES (?1, date('now', 'localtime'))",
+            params![id],
+        )
+        .unwrap();
+
+        let inv = get_inventario_grupo_conn(&conn, GrupoContenido::SeriesAnime).unwrap();
+        assert_eq!(inv, 1);
+    }
+
+    #[test]
+    fn test_06_candidatas_locales_sin_metadatos_completos_son_elegibles() {
+        let conn = setup_test_db();
+
+        insert_contenido(&conn, "MOVIE", 0, "Sin nada", None, None, None);
+        insert_contenido(&conn, "TV", 0, "Solo titulo", Some(""), Some(""), Some("[]"));
+        insert_contenido(&conn, "MOVIE", 1, "Solo sinopsis", None, Some("Desc"), None);
+        insert_contenido(
+            &conn,
+            "TV",
+            1,
+            "Completa",
+            Some("https://img/p.jpg"),
+            Some("Desc"),
+            Some("[\"Accion\"]"),
+        );
+
+        let cand = get_candidatas_locales_por_grupo_conn(&conn).unwrap();
+        assert_eq!(cand.peliculas_no_anime, 1);
+        assert_eq!(cand.series_no_anime, 1);
+        assert_eq!(cand.peliculas_anime, 1);
+        assert_eq!(cand.series_anime, 1);
+        assert_eq!(cand.total, 4);
+    }
+
+    #[test]
+    fn test_07_exclusion_obras_presentes_en_catalogo() {
+        let conn = setup_test_db();
+
+        let id1 = insert_contenido(&conn, "MOVIE", 0, "En catalogo", None, None, None);
+        let _id2 = insert_contenido(&conn, "MOVIE", 0, "Solo local", None, None, None);
+        add_to_catalogo(&conn, id1);
+
+        let cand = get_candidatas_locales_grupo_conn(&conn, GrupoContenido::PeliculasNoAnime).unwrap();
+        assert_eq!(cand, 1);
+    }
+
+    #[test]
+    fn test_08_exclusion_obras_presentes_en_biblioteca() {
+        let conn = setup_test_db();
+
+        let id1 = insert_contenido(&conn, "TV", 0, "En biblioteca", None, None, None);
+        let _id2 = insert_contenido(&conn, "TV", 0, "Candidata", None, None, None);
+        add_to_usuario(&conn, id1, "VIENDO");
+
+        let cand = get_candidatas_locales_grupo_conn(&conn, GrupoContenido::SeriesNoAnime).unwrap();
+        assert_eq!(cand, 1);
+    }
+
+    #[test]
+    fn test_09_reserva_inicial_con_presupuesto_disponible() {
+        let mut conn = setup_test_db();
+        let now = 1_700_000_000;
+
+        let res = reservar_peticion_tmdb_at(&mut conn, "discover_movie", true, now).unwrap();
+        assert_eq!(
+            res,
+            ReservaTmdbResultado::Reservada {
+                reserva_id: 1,
+                peticiones_en_ventana: 1,
+                restante_en_ventana: 17,
+            }
+        );
+
+        let state = get_tmdb_worker_state_conn(&conn).unwrap();
+        assert_eq!(state.ultima_operacion_at, Some(now));
+    }
+
+    #[test]
+    fn test_10_rechazo_al_alcanzar_limite_global() {
+        let mut conn = setup_test_db();
+        let now = 1_700_000_000;
+
+        // 1 inicio de operación + 17 internas = 18 peticiones (límite global)
+        let first = reservar_peticion_tmdb_at(&mut conn, "discover", true, now).unwrap();
+        assert!(matches!(first, ReservaTmdbResultado::Reservada { .. }));
+
+        for i in 0..17 {
+            let r = reservar_peticion_tmdb_at(&mut conn, "details", false, now + i).unwrap();
+            assert!(matches!(r, ReservaTmdbResultado::Reservada { .. }));
+        }
+
+        // La petición 19 debe ser rechazada por presupuesto agotado
+        let rejected = reservar_peticion_tmdb_at(&mut conn, "details", false, now + 18).unwrap();
+        assert_eq!(
+            rejected,
+            ReservaTmdbResultado::PresupuestoAgotado {
+                peticiones_en_ventana: 18,
+                limite_aplicado: 18,
+            }
+        );
+
+        // Si pasan 60s pero aún hay 17 en ventana (> 16), un nuevo inicio de operación también se rechaza
+        let rejected_start =
+            reservar_peticion_tmdb_at(&mut conn, "discover", true, now + 60).unwrap();
+        assert_eq!(
+            rejected_start,
+            ReservaTmdbResultado::PresupuestoAgotado {
+                peticiones_en_ventana: 18,
+                limite_aplicado: 16,
+            }
+        );
+    }
+
+    #[test]
+    fn test_11_rechazo_operacion_nueva_antes_de_60_segundos() {
+        let mut conn = setup_test_db();
+        let now = 1_700_000_000;
+
+        let r1 = reservar_peticion_tmdb_at(&mut conn, "discover", true, now).unwrap();
+        assert!(matches!(r1, ReservaTmdbResultado::Reservada { .. }));
+
+        let r2 = reservar_peticion_tmdb_at(&mut conn, "discover", true, now + 59).unwrap();
+        assert_eq!(
+            r2,
+            ReservaTmdbResultado::IntervaloOperacionNoCumplido {
+                ultimo_inicio_at: now,
+                proximo_disponible_at: now + 60,
+            }
+        );
+
+        let r3 = reservar_peticion_tmdb_at(&mut conn, "discover", true, now + 60).unwrap();
+        assert!(matches!(r3, ReservaTmdbResultado::Reservada { .. }));
+    }
+
+    #[test]
+    fn test_12_peticiones_internas_permitidas_sin_esperar_60_segundos() {
+        let mut conn = setup_test_db();
+        let now = 1_700_000_000;
+
+        let r1 = reservar_peticion_tmdb_at(&mut conn, "discover", true, now).unwrap();
+        assert!(matches!(r1, ReservaTmdbResultado::Reservada { .. }));
+
+        let r2 = reservar_peticion_tmdb_at(&mut conn, "details", false, now + 1).unwrap();
+        assert_eq!(
+            r2,
+            ReservaTmdbResultado::Reservada {
+                reserva_id: 2,
+                peticiones_en_ventana: 2,
+                restante_en_ventana: 16,
+            }
+        );
+
+        // ultima_operacion_at sigue siendo el del inicio de operación
+        let state = get_tmdb_worker_state_conn(&conn).unwrap();
+        assert_eq!(state.ultima_operacion_at, Some(now));
+    }
+
+    #[test]
+    fn test_13_rechazo_reservas_ante_bloqueo_global_activo() {
+        let mut conn = setup_test_db();
+        let now = 1_700_000_000;
+
+        registrar_bloqueo_tmdb_conn(&mut conn, now + 120, "HTTP 429").unwrap();
+
+        let r_start = reservar_peticion_tmdb_at(&mut conn, "discover", true, now).unwrap();
+        assert_eq!(
+            r_start,
+            ReservaTmdbResultado::BloqueoActivo {
+                bloqueado_hasta: now + 120,
+                motivo: Some("HTTP 429".to_string()),
+            }
+        );
+
+        let r_internal = reservar_peticion_tmdb_at(&mut conn, "details", false, now + 10).unwrap();
+        assert_eq!(
+            r_internal,
+            ReservaTmdbResultado::BloqueoActivo {
+                bloqueado_hasta: now + 120,
+                motivo: Some("HTTP 429".to_string()),
+            }
+        );
+
+        // Expirado el bloqueo, vuelve a permitir reserva
+        let r_after = reservar_peticion_tmdb_at(&mut conn, "discover", true, now + 120).unwrap();
+        assert!(matches!(r_after, ReservaTmdbResultado::Reservada { .. }));
+    }
+
+    #[test]
+    fn test_14_verificacion_atomica_bloqueo_y_presupuesto() {
+        let mut conn = setup_test_db();
+        let now = 1_700_000_000;
+
+        // Llenar 17 peticiones en ventana (es_inicio_operacion requiere count <= 16)
+        for i in 0..17 {
+            conn.execute(
+                "INSERT INTO tmdb_request_log (requested_at, endpoint_kind) VALUES (?1, 'seed')",
+                params![now - 10 + i],
+            )
+            .unwrap();
+        }
+
+        // Fallo por presupuesto no debe actualizar ultima_operacion_at ni insertar log
+        let r_fail = reservar_peticion_tmdb_at(&mut conn, "discover", true, now + 20).unwrap();
+        assert!(matches!(
+            r_fail,
+            ReservaTmdbResultado::PresupuestoAgotado {
+                peticiones_en_ventana: 17,
+                limite_aplicado: 16
+            }
+        ));
+
+        let state = get_tmdb_worker_state_conn(&conn).unwrap();
+        assert_eq!(state.ultima_operacion_at, None);
+
+        let log_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tmdb_request_log", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(log_count, 17);
+    }
+
+    #[test]
+    fn test_15_limpieza_marcas_mayores_a_900_segundos() {
+        let mut conn = setup_test_db();
+        let now = 1_700_000_000;
+
+        // Antigua (> 900s) -> debe eliminarse
+        conn.execute(
+            "INSERT INTO tmdb_request_log (requested_at, endpoint_kind) VALUES (?1, 'old')",
+            params![now - 901],
+        )
+        .unwrap();
+        // Dentro de retención (<= 900s) pero fuera de ventana (300s) -> debe conservarse
+        conn.execute(
+            "INSERT INTO tmdb_request_log (requested_at, endpoint_kind) VALUES (?1, 'mid')",
+            params![now - 500],
+        )
+        .unwrap();
+        // Dentro de ventana (300s) -> debe conservarse y contarse
+        conn.execute(
+            "INSERT INTO tmdb_request_log (requested_at, endpoint_kind) VALUES (?1, 'recent')",
+            params![now - 100],
+        )
+        .unwrap();
+
+        let res = reservar_peticion_tmdb_at(&mut conn, "discover", true, now).unwrap();
+        assert_eq!(
+            res,
+            ReservaTmdbResultado::Reservada {
+                reserva_id: 4,
+                peticiones_en_ventana: 2,
+                restante_en_ventana: 16,
+            }
+        );
+
+        let old_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tmdb_request_log WHERE endpoint_kind = 'old'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mid_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tmdb_request_log WHERE endpoint_kind = 'mid'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_count, 0);
+        assert_eq!(mid_count, 1);
+    }
+
+    #[test]
+    fn test_16_persistencia_y_consulta_cooldowns_y_errores() {
+        let mut conn = setup_test_db();
+
+        let errs1 = registrar_error_tmdb_conn(&mut conn, "timeout").unwrap();
+        let errs2 = registrar_error_tmdb_conn(&mut conn, "502").unwrap();
+        assert_eq!(errs1, 1);
+        assert_eq!(errs2, 2);
+
+        let st = get_tmdb_worker_state_conn(&conn).unwrap();
+        assert_eq!(st.ultimo_error.as_deref(), Some("502"));
+        assert_eq!(st.errores_consecutivos, 2);
+
+        restablecer_errores_tmdb_conn(&mut conn).unwrap();
+        let st_reset = get_tmdb_worker_state_conn(&conn).unwrap();
+        assert_eq!(st_reset.errores_consecutivos, 0);
+        assert_eq!(st_reset.ultimo_error, None);
+
+        registrar_cooldown_grupo_conn(
+            &mut conn,
+            GrupoContenido::PeliculasAnime,
+            1_700_005_000,
+            3,
+            Some("Sin resultados nuevos"),
+        )
+        .unwrap();
+
+        let cd = get_cooldown_grupo_conn(&conn, GrupoContenido::PeliculasAnime)
+            .unwrap()
+            .expect("cooldown debe existir");
+        assert_eq!(cd.bloqueado_hasta, 1_700_005_000);
+        assert_eq!(cd.fallos_sin_aporte, 3);
+        assert_eq!(cd.motivo.as_deref(), Some("Sin resultados nuevos"));
+
+        restablecer_cooldown_grupo_conn(&mut conn, GrupoContenido::PeliculasAnime).unwrap();
+        let cd_after = get_cooldown_grupo_conn(&conn, GrupoContenido::PeliculasAnime).unwrap();
+        assert!(cd_after.is_none());
+    }
+
+    #[test]
+    fn test_17_persistencia_y_consulta_reintentos_posteres() {
+        let mut conn = setup_test_db();
+        let id = insert_contenido(&conn, "MOVIE", 0, "Poster Test", None, None, None);
+        add_to_catalogo(&conn, id);
+        let now = 1_700_000_000;
+
+        let f1 = registrar_fallo_poster_at(&mut conn, id, "https://img/a.jpg", "404", now).unwrap();
+        assert_eq!(f1.intentos, 1);
+        assert_eq!(f1.estado, ESTADO_POSTER_PENDIENTE);
+        assert_eq!(f1.proximo_reintento, Some(now + 300));
+
+        // Todavía no vence a now+100
+        let pend_antes = get_posters_pendientes_mantenimiento_at(&conn, now + 100, 10).unwrap();
+        assert!(pend_antes.is_empty());
+
+        // Vence a now+300
+        let pend_despues = get_posters_pendientes_mantenimiento_at(&conn, now + 300, 10).unwrap();
+        assert_eq!(pend_despues.len(), 1);
+        assert_eq!(pend_despues[0].contenido_id, id);
+
+        // Cambio de URL reinicia el estado
+        let reiniciado =
+            reiniciar_poster_retry_si_cambia_url_conn(&mut conn, id, "https://img/b.jpg").unwrap();
+        assert!(reiniciado);
+        assert!(get_poster_retry_state_conn(&conn, id).unwrap().is_none());
+
+        // Agotar intentos con nueva URL
+        for i in 1..=POSTER_MAX_INTENTOS {
+            let res =
+                registrar_fallo_poster_at(&mut conn, id, "https://img/b.jpg", "500", now + i)
+                    .unwrap();
+            if i < POSTER_MAX_INTENTOS {
+                assert_eq!(res.estado, ESTADO_POSTER_PENDIENTE);
+            } else {
+                assert_eq!(res.estado, ESTADO_POSTER_AGOTADO);
+                assert_eq!(res.proximo_reintento, None);
+            }
+        }
+
+        // Éxito marca como resuelto
+        registrar_exito_poster_at(&mut conn, id, now + 999).unwrap();
+        let final_state = get_poster_retry_state_conn(&conn, id).unwrap().unwrap();
+        assert_eq!(final_state.estado, ESTADO_POSTER_RESUELTO);
+        assert_eq!(final_state.intentos, 0);
+        assert_eq!(final_state.proximo_reintento, None);
+    }
+
+    #[test]
+    fn test_d4_normalizar_poster_url_salida_y_archivo_local() {
+        assert_eq!(normalizar_poster_url_salida(None), None);
+        assert_eq!(normalizar_poster_url_salida(Some("".to_string())), None);
+        assert_eq!(normalizar_poster_url_salida(Some("   \t\n ".to_string())), None);
+        assert_eq!(
+            normalizar_poster_url_salida(Some("  /abc.jpg  ".to_string())),
+            Some("https://image.tmdb.org/t/p/w500/abc.jpg".to_string())
+        );
+        assert_eq!(
+            normalizar_poster_url_salida(Some("abc.jpg".to_string())),
+            Some("https://image.tmdb.org/t/p/w500/abc.jpg".to_string())
+        );
+        assert_eq!(
+            normalizar_poster_url_salida(Some("https://cdn.example.com/p.jpg".to_string())),
+            Some("https://cdn.example.com/p.jpg".to_string())
+        );
+        assert_eq!(
+            normalizar_poster_url_salida(Some("http://cdn.example.com/p.jpg".to_string())),
+            Some("http://cdn.example.com/p.jpg".to_string())
+        );
+        assert_eq!(
+            normalizar_poster_url_salida(Some(
+                "https://image.tmdb.org/t/p/w500https://cdn.myanimelist.net/images/1.jpg"
+                    .to_string()
+            )),
+            Some("https://cdn.myanimelist.net/images/1.jpg".to_string())
+        );
+        assert_eq!(
+            normalizar_poster_url_salida(Some(
+                "http://image.tmdb.org/t/p/w500http://cdn.example.com/1.jpg".to_string()
+            )),
+            Some("http://cdn.example.com/1.jpg".to_string())
+        );
+        assert_eq!(
+            normalizar_poster_url_salida(Some(
+                "https://image.tmdb.org/t/p/w500https://image.tmdb.org/t/p/w500/xyz.jpg"
+                    .to_string()
+            )),
+            Some("https://image.tmdb.org/t/p/w500/xyz.jpg".to_string())
+        );
+
+        let dir = std::env::temp_dir().join(format!(
+            "queveohoy_d4_norm_test_{}_{}",
+            std::process::id(),
+            current_unix_timestamp()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = 4242_i64;
+        let local_path = dir.join(format!("{}.jpg", id));
+        std::fs::write(&local_path, b"fakejpg").unwrap();
+
+        let resolved = resolve_poster_salida(&dir, id, Some("/remoto.jpg".to_string()));
+        assert_eq!(resolved, Some(local_path.to_string_lossy().to_string()));
+
+        let resolved_missing = resolve_poster_salida(&dir, 9999, Some("/remoto.jpg".to_string()));
+        assert_eq!(
+            resolved_missing,
+            Some("https://image.tmdb.org/t/p/w500/remoto.jpg".to_string())
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_d4_normalizar_poster_url_rechaza_esquemas_no_admitidos() {
+        assert_eq!(
+            normalizar_poster_url_salida(Some("ftp://x.jpg".to_string())),
+            None
+        );
+        assert_eq!(
+            normalizar_poster_url_salida(Some("file:///C:/posters/x.jpg".to_string())),
+            None
+        );
+        assert_eq!(
+            normalizar_poster_url_salida(Some("data:image/png;base64,AAAA".to_string())),
+            None
+        );
+        assert_eq!(
+            normalizar_poster_url_salida(Some("javascript:alert(1)".to_string())),
+            None
+        );
+        assert_eq!(
+            normalizar_poster_url_salida(Some("s3://bucket/x.jpg".to_string())),
+            None
+        );
+        // Rutas relativas válidas siguen normalizándose con prefijo TMDB
+        assert_eq!(
+            normalizar_poster_url_salida(Some("sub/x.jpg".to_string())),
+            Some("https://image.tmdb.org/t/p/w500/sub/x.jpg".to_string())
+        );
+    }
+
+    #[test]
+    fn test_d4_normalizar_poster_url_acepta_esquema_http_https_case_insensitive() {
+        for url in [
+            "http://example.com/poster.jpg",
+            "https://example.com/poster.jpg",
+            "HTTP://example.com/poster.jpg",
+            "HTTPS://example.com/poster.jpg",
+            "HtTpS://example.com/poster.jpg",
+        ] {
+            assert_eq!(
+                normalizar_poster_url_salida(Some(url.to_string())),
+                Some(url.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn test_d4_get_posters_pendientes_mantenimiento_filtra_candidatas() {
+        let mut conn = setup_test_db();
+        let now = 1_700_000_000;
+
+        // 1. Válida en catalogo_offline sin fila en poster_retry_state (sin sinopsis ni fecha)
+        let id_ok_rel = insert_contenido(&conn, "MOVIE", 0, "Rel Path", Some("/a.jpg"), None, None);
+        add_to_catalogo(&conn, id_ok_rel);
+
+        // 2. Válida https en catalogo_offline y presente en omitidos_sesion (debe incluirse)
+        let id_ok_http = insert_contenido(
+            &conn,
+            "SERIES",
+            1,
+            "Omitida",
+            Some("https://cdn/b.jpg"),
+            None,
+            None,
+        );
+        add_to_catalogo(&conn, id_ok_http);
+        conn.execute(
+            "INSERT INTO omitidos_sesion (contenido_id, fecha) VALUES (?1, '2026-11-14')",
+            params![id_ok_http],
+        )
+        .unwrap();
+
+        // 3. En usuario_contenido -> excluida
+        let id_usuario = insert_contenido(
+            &conn,
+            "MOVIE",
+            0,
+            "En Usuario",
+            Some("/user.jpg"),
+            None,
+            None,
+        );
+        add_to_catalogo(&conn, id_usuario);
+        conn.execute(
+            "INSERT INTO usuario_contenido (contenido_id, estado) VALUES (?1, 'PENDIENTE')",
+            params![id_usuario],
+        )
+        .unwrap();
+
+        // 4. Solo en contenido, NO en catalogo_offline -> excluida
+        let _id_solo_contenido = insert_contenido(
+            &conn,
+            "MOVIE",
+            0,
+            "Solo Contenido",
+            Some("/solo.jpg"),
+            None,
+            None,
+        );
+
+        // 5. URL nula, vacía o inválida -> excluidas
+        let id_null = insert_contenido(&conn, "MOVIE", 0, "Null", None, None, None);
+        add_to_catalogo(&conn, id_null);
+        let id_empty = insert_contenido(&conn, "MOVIE", 0, "Empty", Some("   "), None, None);
+        add_to_catalogo(&conn, id_empty);
+        let id_invalid = insert_contenido(&conn, "MOVIE", 0, "Invalid", Some("abc.jpg"), None, None);
+        add_to_catalogo(&conn, id_invalid);
+
+        // 6. Agotada -> excluida
+        let id_agotada = insert_contenido(
+            &conn,
+            "MOVIE",
+            0,
+            "Agotada",
+            Some("/agotada.jpg"),
+            None,
+            None,
+        );
+        add_to_catalogo(&conn, id_agotada);
+        for i in 1..=POSTER_MAX_INTENTOS {
+            registrar_fallo_poster_at(&mut conn, id_agotada, "/agotada.jpg", "404", now + i)
+                .unwrap();
+        }
+
+        // 7. Resuelta -> excluida
+        let id_resuelta = insert_contenido(
+            &conn,
+            "MOVIE",
+            0,
+            "Resuelta",
+            Some("/resuelta.jpg"),
+            None,
+            None,
+        );
+        add_to_catalogo(&conn, id_resuelta);
+        registrar_exito_poster_at(&mut conn, id_resuelta, now).unwrap();
+
+        let pendientes = get_posters_pendientes_mantenimiento_at(&conn, now + 100, 20).unwrap();
+        let ids: Vec<i64> = pendientes.iter().map(|p| p.contenido_id).collect();
+        assert_eq!(ids, vec![id_ok_rel, id_ok_http]);
+    }
+
+    #[test]
+    fn test_d4_backoff_agotado_no_elimina_ni_excluye_elegibilidad() {
+        let mut conn = setup_test_db();
+        let now = 1_700_000_000;
+        let id = insert_contenido(
+            &conn,
+            "MOVIE",
+            0,
+            "Obra Sin Poster",
+            Some("https://bad.example/404.jpg"),
+            None,
+            None,
+        );
+        add_to_catalogo(&conn, id);
+
+        let expected_backoffs = [300_i64, 900, 3600, 21600];
+        for (idx, backoff) in expected_backoffs.iter().enumerate() {
+            let st = registrar_fallo_poster_at(
+                &mut conn,
+                id,
+                "https://bad.example/404.jpg",
+                "404",
+                now,
+            )
+            .unwrap();
+            assert_eq!(st.intentos, (idx + 1) as i64);
+            assert_eq!(st.estado, ESTADO_POSTER_PENDIENTE);
+            assert_eq!(st.proximo_reintento, Some(now + backoff));
+        }
+
+        let quinto = registrar_fallo_poster_at(
+            &mut conn,
+            id,
+            "https://bad.example/404.jpg",
+            "404",
+            now,
+        )
+        .unwrap();
+        assert_eq!(quinto.intentos, 5);
+        assert_eq!(quinto.estado, ESTADO_POSTER_AGOTADO);
+        assert_eq!(quinto.proximo_reintento, None);
+
+        // Sigue en contenido y catalogo_offline, y no vuelve a la cola de reintentos
+        let en_catalogo: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM catalogo_offline WHERE contenido_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(en_catalogo, 1);
+
+        let pend = get_posters_pendientes_mantenimiento_at(&conn, now + 999_999, 10).unwrap();
+        assert!(pend.is_empty());
+
+        // La lectura de URL almacenada no muta la base de datos
+        let stored_url: Option<String> = conn
+            .query_row(
+                "SELECT poster_url FROM contenido WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_url.as_deref(), Some("https://bad.example/404.jpg"));
+    }
+
+    #[test]
+    fn test_d4_persistir_resultados_posters_minibatch() {
+        let mut conn = setup_test_db();
+        let now = 1_700_000_000;
+        let id_ok = insert_contenido(&conn, "MOVIE", 0, "OK", Some("/ok.jpg"), None, None);
+        let id_fail = insert_contenido(&conn, "MOVIE", 0, "Fail", Some("/fail.jpg"), None, None);
+        add_to_catalogo(&conn, id_ok);
+        add_to_catalogo(&conn, id_fail);
+
+        let batch = vec![
+            ResultadoDescargaPoster::Exito {
+                contenido_id: id_ok,
+            },
+            ResultadoDescargaPoster::Fallo {
+                contenido_id: id_fail,
+                url: "/fail.jpg".to_string(),
+                error: "HTTP 500".to_string(),
+            },
+        ];
+        persistir_resultados_posters_at(&mut conn, &batch, now).unwrap();
+
+        let st_ok = get_poster_retry_state_conn(&conn, id_ok).unwrap().unwrap();
+        assert_eq!(st_ok.estado, ESTADO_POSTER_RESUELTO);
+
+        let st_fail = get_poster_retry_state_conn(&conn, id_fail).unwrap().unwrap();
+        assert_eq!(st_fail.estado, ESTADO_POSTER_PENDIENTE);
+        assert_eq!(st_fail.intentos, 1);
+        assert_eq!(st_fail.proximo_reintento, Some(now + 300));
+    }
 }
